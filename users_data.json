@@ -1,0 +1,77 @@
+{
+  "995380371": {
+    "username": "azizVPN",
+    "first_name": "𝓐𝔃𝓲𝔃𝓸𝓵𝓵𝓪𝓱",
+    "last_name": null,
+    "join_date": "2025-07-13 21:28:15",
+    "orders": [],
+    "total_spent": 0
+  },
+  "6211336377": {
+    "username": "ndndndjdjmm",
+    "first_name": "...",
+    "last_name": null,
+    "join_date": "2025-07-13 21:31:21",
+    "orders": [
+      {
+        "data_plan": "100GB",
+        "duration": "1month",
+        "username": "ge",
+        "price": 120000,
+        "order_time": "2025-07-13 21:31:39",
+        "receipt_id": 348
+      },
+      {
+        "data_plan": "30GB",
+        "duration": "1month",
+        "username": "teting",
+        "price": 20000,
+        "order_time": "2025-07-13 21:39:58",
+        "receipt_id": 445
+      },
+      {
+        "data_plan": "70GB",
+        "duration": "1month",
+        "username": "easy",
+        "price": 45000,
+        "order_time": "2025-07-13 21:46:39",
+        "receipt_id": 480
+      }
+    ],
+    "total_spent": 185000
+  },
+  "1023059137": {
+    "username": "survive_d",
+    "first_name": "AmirMuhammad",
+    "last_name": null,
+    "join_date": "2025-07-13 21:57:12",
+    "orders": [
+      {
+        "data_plan": "150GB",
+        "duration": "1month",
+        "username": "AmirMuhammad",
+        "price": 90000,
+        "order_time": "2025-07-13 21:58:36",
+        "receipt_id": 540
+      }
+    ],
+    "total_spent": 90000
+  },
+  "7952331488": {
+    "username": "azizam_10me",
+    "first_name": "evil",
+    "last_name": null,
+    "join_date": "2025-07-13 22:07:00",
+    "orders": [
+      {
+        "data_plan": "50GB",
+        "duration": "1month",
+        "username": "سلام",
+        "price": 60000,
+        "order_time": "2025-07-13 22:09:39",
+        "receipt_id": 695
+      }
+    ],
+    "total_spent": 60000
+  }
+}
