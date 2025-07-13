@@ -1,1 +1,21 @@
-pyTelegramBotAPI>=4.12.0 
+# AzizVPN Bot Requirements
+# Telegram Bot API
+pyTelegramBotAPI>=4.12.0
+
+# HTTP requests (for webhook deletion)
+requests>=2.31.0
+
+# Standard libraries (included with Python):
+# - os
+# - time
+# - json
+# - datetime
+# - re (regex)
+# - hashlib
+# - uuid
+# - tempfile
+# - threading
+
+# Optional but recommended:
+# - python-dotenv (for environment variables)
+python-dotenv>=1.0.0 
