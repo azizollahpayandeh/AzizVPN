@@ -12,6 +12,9 @@ ADMIN_ID = int(os.getenv("ADMIN_ID"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 CARD_NUMBER = os.getenv("CARD_NUMBER")
 
+# تنظیمات اضافی برای بهبود تجربه کاربری
+MAX_RETRIES = 3  # حداکثر تلاش برای ورود اطلاعات
+SESSION_TIMEOUT = 300  # زمان انقضای جلسه (5 دقیقه)
 
 # فایل‌های ذخیره‌سازی
 DATA_FILES = {
@@ -37,6 +40,9 @@ orders_db = {}  # ذخیره سفارشات
 
 # حافظه موقت برای سفارشات در انتظار تأیید
 pending_orders = {}  # {order_id: {user_id, order_info}}
+
+# مدیریت جلسات کاربران
+user_sessions = {}  # {user_id: {'step': 'current_step', 'data': {}, 'timestamp': time.time()}}
 
 # تابع‌های ذخیره‌سازی و بارگذاری داده‌ها
 def save_data():
@@ -145,68 +151,110 @@ prices = {
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
+    user_name = message.from_user.first_name or "کاربر"
     
     # بررسی مسدودیت کاربر
     if user_id in blocked_users:
-        bot.send_message(message.chat.id, "❌ شما از استفاده از این ربات مسدود شده‌اید.")
+        bot.send_message(message.chat.id, 
+                        "❌ شما از استفاده از این ربات مسدود شده‌اید.\n"
+                        "لطفا با پشتیبانی تماس بگیرید.")
         return
+    
+    # شروع جلسه جدید
+    start_user_session(user_id, 'main_menu')
     
     # ثبت کاربر در دیتابیس
     if user_id not in users_db:
         users_db[user_id] = {
-            'username': message.from_user.username,
-            'first_name': message.from_user.first_name,
-            'last_name': message.from_user.last_name,
+            'first_name': user_name,
+            'username': message.from_user.username or '',
             'join_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'orders': [],
-            'total_spent': 0
+            'total_spent': 0,
+            'configs': []
         }
-        save_data()  # ذخیره تغییرات
+        save_data()
+        print(f"New user registered: {user_id} ({user_name})")
     
-    # پاک کردن اطلاعات قبلی کاربر اگر وجود داشته باشد
-    if user_id in user_data:
-        user_data[user_id] = {}
+    # ارسال پیام خوش‌آمدگویی
+    send_welcome_message(message.chat.id, user_name)
+
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    """دستور راهنما"""
+    help_text = """
+📚 راهنمای استفاده از ربات
+
+🔹 دستورات اصلی:
+/start - شروع ربات و نمایش منوی اصلی
+/help - نمایش این راهنما
+
+🔹 مراحل خرید:
+1. روی «🛒 خرید فیلترشکن» کلیک کنید
+2. حجم داده مورد نظر را انتخاب کنید
+3. مدت زمان اشتراک را انتخاب کنید
+4. نام کاربری دلخواه وارد کنید
+5. قیمت را بررسی و تأیید کنید
+6. مبلغ را پرداخت کنید
+7. رسید را ارسال کنید
+8. منتظر تأیید ادمین بمانید
+
+🔹 سایر امکانات:
+• 👤 حساب من - مشاهده اطلاعات حساب
+• 🔐 کانفیگ‌های من - دانلود کانفیگ‌های خریداری شده
+• 📞 پشتیبانی - ارتباط با پشتیبانی
+
+💡 نکات مهم:
+• تمام پرداخت‌ها امن و محافظت شده هستند
+• کانفیگ‌ها پس از تأیید پرداخت ارسال می‌شوند
+• در صورت مشکل با پشتیبانی تماس بگیرید
+    """
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    btn1 = types.KeyboardButton('🛒 خرید فیلترشکن')
-    btn2 = types.KeyboardButton('👤 حساب من')
-    btn3 = types.KeyboardButton('🔐 کانفیگ‌های من')
-    btn4 = types.KeyboardButton('📞 پشتیبانی')
-    markup.add(btn1, btn2, btn3, btn4)
-    
-    # اگر کاربر ادمین است، دکمه مدیریت را اضافه کن
-    if user_id == ADMIN_ID:
-        admin_btn = types.KeyboardButton('⚙️ پنل مدیریت')
-        markup.add(admin_btn)
-        bot.send_message(message.chat.id, f"🔐 شما به عنوان ادمین شناسایی شدید. آیدی شما: {user_id}")
-    
-    bot.send_message(message.chat.id, 
-                     "👋 سلام به ربات فروش فیلترشکن AzizVPN خوش آمدید!\n\n"
-                     "لطفا یکی از گزینه‌های زیر را انتخاب کنید:", 
-                     reply_markup=markup)
+    markup = create_main_menu()
+    bot.send_message(message.chat.id, help_text, reply_markup=markup)
 
 # پاسخ به دکمه‌های اصلی
 @bot.message_handler(func=lambda message: message.text in ['🛒 خرید فیلترشکن', '👤 حساب من', '🔐 کانفیگ‌های من', '📞 پشتیبانی', '⚙️ پنل مدیریت'])
 def main_menu_handler(message):
+    user_id = message.from_user.id
+    
+    # بررسی مسدودیت
+    if user_id in blocked_users:
+        bot.send_message(message.chat.id, "❌ شما از استفاده از این ربات مسدود شده‌اید.")
+        return
+    
+    # به‌روزرسانی جلسه
+    update_user_session(user_id, 'main_menu')
+    
     if message.text == '🛒 خرید فیلترشکن':
+        # پاک کردن اطلاعات قبلی
+        if user_id in user_data:
+            user_data[user_id] = {}
+        
+        update_user_session(user_id, 'buying', {'retry_count': 0})
         show_data_plans(message)
+        
     elif message.text == '👤 حساب من':
         show_user_account(message)
+        
     elif message.text == '🔐 کانفیگ‌های من':
         show_user_configs(message)
-    elif message.text == '📞 پشتیبانی':
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        back = types.KeyboardButton('🔙 بازگشت')
-        markup.add(back)
         
+    elif message.text == '📞 پشتیبانی':
+        update_user_session(user_id, 'support')
+        markup = create_back_button()
         bot.send_message(message.chat.id, 
-                         "📞 پشتیبانی:\n\n"
-                         "لطفا پیام خود را ارسال کنید تا برای پشتیبانی ارسال شود.\n"
-                         "همکاران ما در اسرع وقت به شما پاسخ خواهند داد.",
-                         reply_markup=markup)
+                        "📞 پشتیبانی\n\n"
+                        "برای ارتباط با پشتیبانی، پیام خود را ارسال کنید.\n"
+                        "کارشناسان ما در اسرع وقت پاسخ شما را خواهند داد.",
+                        reply_markup=markup)
         bot.register_next_step_handler(message, process_support_message)
-    elif message.text == '⚙️ پنل مدیریت' and message.from_user.id == ADMIN_ID:
-        show_admin_panel(message)
+        
+    elif message.text == '⚙️ پنل مدیریت':
+        if user_id == ADMIN_ID:
+            show_admin_panel(message)
+        else:
+            bot.send_message(message.chat.id, "⛔️ شما دسترسی به این بخش را ندارید.")
 
 # پاسخ به دکمه‌های پنل مدیریت
 @bot.message_handler(func=lambda message: message.text in ['👥 مدیریت کاربران', '📊 آمار ربات', '🔐 مدیریت کانفیگ‌ها', '📢 پیام همگانی', '💰 مدیریت تخفیف', '🚫 مدیریت مسدودیت', '📞 پیام‌های پشتیبانی', '🔄 تست ارسال به ادمین'])
@@ -234,23 +282,61 @@ def admin_panel_handler(message):
 # نمایش حساب کاربری
 def show_user_account(message):
     user_id = message.from_user.id
-    if user_id in users_db:
-        user = users_db[user_id]
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        back = types.KeyboardButton('🔙 بازگشت')
-        markup.add(back)
-        
-        bot.send_message(message.chat.id, 
-                         f"👤 حساب کاربری شما:\n\n"
-                         f"🆔 آیدی: `{user_id}`\n"
-                         f"👤 نام: {user.get('first_name', 'نامشخص')}\n"
-                         f"📅 تاریخ عضویت: {user.get('join_date', 'نامشخص')}\n"
-                         f"📦 تعداد سفارشات: {len(user.get('orders', []))}\n"
-                         f"💰 کل هزینه: {user.get('total_spent', 0):,} تومان",
-                         parse_mode="Markdown",
-                         reply_markup=markup)
-    else:
+    
+    # بررسی مسدودیت
+    if user_id in blocked_users:
+        bot.send_message(message.chat.id, "❌ شما از استفاده از این ربات مسدود شده‌اید.")
+        return
+    
+    if user_id not in users_db:
         bot.send_message(message.chat.id, "❌ اطلاعات کاربری یافت نشد.")
+        return
+    
+    user = users_db[user_id]
+    orders = user.get('orders', [])
+    total_spent = user.get('total_spent', 0)
+    join_date = user.get('join_date', 'نامشخص')
+    
+    # محاسبه آمار
+    total_orders = len(orders)
+    active_configs = len(user.get('configs', []))
+    
+    # نمایش اطلاعات حساب
+    account_info = f"""
+👤 حساب کاربری شما
+
+📊 اطلاعات شخصی:
+• نام: {user.get('first_name', 'نامشخص')}
+• یوزرنیم: @{user.get('username', 'نامشخص')}
+• تاریخ عضویت: {join_date}
+
+📈 آمار خرید:
+• تعداد سفارشات: {total_orders} عدد
+• کل هزینه: {total_spent:,} تومان
+• کانفیگ‌های فعال: {active_configs} عدد
+
+"""
+    
+    if total_orders > 0:
+        account_info += "📋 آخرین سفارشات:\n"
+        for i, order in enumerate(orders[-3:], 1):  # نمایش 3 سفارش آخر
+            data_plan = order.get('data_plan', '').replace('GB', ' گیگابایت')
+            duration = order.get('duration', '')
+            price = order.get('price', 0)
+            order_time = order.get('order_time', 'نامشخص')
+            
+            duration_text = {
+                '1month': '1 ماهه',
+                '3month': '3 ماهه',
+                '6month': '6 ماهه',
+                '1year': '1 ساله'
+            }.get(duration, duration)
+            
+            account_info += f"• {i}. {data_plan} - {duration_text} - {price:,} تومان\n"
+            account_info += f"  📅 {order_time}\n\n"
+    
+    markup = create_main_menu()
+    bot.send_message(message.chat.id, account_info, reply_markup=markup)
 
 # نمایش کانفیگ‌های کاربر
 def show_user_configs(message):
@@ -799,223 +885,479 @@ def test_admin_message(message):
 
 # نمایش پلن‌های حجمی
 def show_data_plans(message):
+    """نمایش پلن‌های حجم داده با طراحی بهتر"""
     user_id = message.from_user.id
     
-    # بررسی مسدودیت کاربر
-    if user_id in blocked_users:
-        bot.send_message(message.chat.id, "❌ شما از استفاده از این ربات مسدود شده‌اید.")
-        return
-    
-    # ایجاد حافظه موقت برای کاربر اگر وجود نداشته باشد
-    if user_id not in user_data:
-        user_data[user_id] = {}
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    btn1 = types.KeyboardButton('30 گیگابایت')
-    btn2 = types.KeyboardButton('50 گیگابایت')
-    btn3 = types.KeyboardButton('70 گیگابایت')
-    btn4 = types.KeyboardButton('100 گیگابایت')
-    btn5 = types.KeyboardButton('150 گیگابایت')
-    back = types.KeyboardButton('🔙 بازگشت')
-    markup.add(btn1, btn2, btn3, btn4, btn5, back)
-    
-    bot.send_message(message.chat.id, 
-                     "🔄 لطفا حجم مورد نظر خود را انتخاب کنید:", 
-                     reply_markup=markup)
-    bot.register_next_step_handler(message, process_data_plan)
-
-# پردازش انتخاب حجم
-def process_data_plan(message):
-    if message.text == '🔙 بازگشت':
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
         start(message)
         return
     
+    update_user_session(user_id, 'selecting_data_plan')
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    
+    # دکمه‌های حجم داده با طراحی بهتر
+    btn_1gb = types.KeyboardButton('📊 1 گیگابایت')
+    btn_2gb = types.KeyboardButton('📊 2 گیگابایت')
+    btn_5gb = types.KeyboardButton('📊 5 گیگابایت')
+    btn_10gb = types.KeyboardButton('📊 10 گیگابایت')
+    btn_20gb = types.KeyboardButton('📊 20 گیگابایت')
+    btn_50gb = types.KeyboardButton('📊 50 گیگابایت')
+    
+    back_btn = types.KeyboardButton('🔙 بازگشت')
+    home_btn = types.KeyboardButton('🏠 منوی اصلی')
+    
+    markup.add(btn_1gb, btn_2gb, btn_5gb, btn_10gb, btn_20gb, btn_50gb, back_btn, home_btn)
+    
+    plans_text = """
+📊 انتخاب حجم داده
+
+لطفا حجم مورد نظر خود را انتخاب کنید:
+
+🔹 1 گیگابایت - مناسب برای وب‌گردی
+🔹 2 گیگابایت - مناسب برای شبکه‌های اجتماعی
+🔹 5 گیگابایت - مناسب برای تماشای ویدیو
+🔹 10 گیگابایت - مناسب برای دانلود
+🔹 20 گیگابایت - مناسب برای استفاده سنگین
+🔹 50 گیگابایت - مناسب برای استفاده حرفه‌ای
+
+💡 نکته: حجم انتخاب شده برای مدت زمان مشخصی معتبر خواهد بود.
+    """
+    
+    bot.send_message(message.chat.id, plans_text, reply_markup=markup)
+
+# پردازش انتخاب حجم داده
+@bot.message_handler(func=lambda message: message.text in ['📊 1 گیگابایت', '📊 2 گیگابایت', '📊 5 گیگابایت', '📊 10 گیگابایت', '📊 20 گیگابایت', '📊 50 گیگابایت'])
+def process_data_plan(message):
     user_id = message.from_user.id
     
-    if message.text not in ['30 گیگابایت', '50 گیگابایت', '70 گیگابایت', '100 گیگابایت', '150 گیگابایت']:
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
+        start(message)
+        return
+    
+    # ایجاد حافظه موقت برای کاربر
+    if user_id not in user_data:
+        user_data[user_id] = {}
+    
+    # تبدیل متن به حجم داده
+    data_plan_map = {
+        '📊 1 گیگابایت': '1GB',
+        '📊 2 گیگابایت': '2GB',
+        '📊 5 گیگابایت': '5GB',
+        '📊 10 گیگابایت': '10GB',
+        '📊 20 گیگابایت': '20GB',
+        '📊 50 گیگابایت': '50GB'
+    }
+    
+    selected_plan = data_plan_map.get(message.text)
+    if not selected_plan:
         bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
-        show_data_plans(message)
         return
     
     # ذخیره حجم انتخاب شده
-    if message.text == '30 گیگابایت':
-        user_data[user_id]['data_plan'] = '30GB'
-    elif message.text == '50 گیگابایت':
-        user_data[user_id]['data_plan'] = '50GB'
-    elif message.text == '70 گیگابایت':
-        user_data[user_id]['data_plan'] = '70GB'
-    elif message.text == '100 گیگابایت':
-        user_data[user_id]['data_plan'] = '100GB'
-    elif message.text == '150 گیگابایت':
-        user_data[user_id]['data_plan'] = '150GB'
+    user_data[user_id]['data_plan'] = selected_plan
+    update_user_session(user_id, 'data_selected', {'data_plan': selected_plan})
     
     # نمایش زمان‌های اشتراک
     show_duration_plans(message)
 
 # نمایش پلن‌های زمانی
 def show_duration_plans(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    btn1 = types.KeyboardButton('1 ماهه')
-    back = types.KeyboardButton('🔙 بازگشت')
-    markup.add(btn1, back)
-    
-    bot.send_message(message.chat.id, 
-                     "⏱ لطفا مدت زمان اشتراک را انتخاب کنید:", 
-                     reply_markup=markup)
-    bot.register_next_step_handler(message, process_duration_plan)
-
-# پردازش انتخاب مدت زمان
-def process_duration_plan(message):
-    if message.text == '🔙 بازگشت':
-        show_data_plans(message)
-        return
-    
+    """نمایش پلن‌های مدت زمان با طراحی بهتر"""
     user_id = message.from_user.id
     
-    if message.text not in ['1 ماهه']:
-        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
-        show_duration_plans(message)
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
+        start(message)
         return
     
-    # ذخیره زمان انتخاب شده
-    if message.text == '1 ماهه':
-        user_data[user_id]['duration'] = '1month'
+    update_user_session(user_id, 'selecting_duration')
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    
+    # دکمه‌های مدت زمان با طراحی بهتر
+    btn_1month = types.KeyboardButton('⏱ 1 ماهه')
+    btn_3month = types.KeyboardButton('⏱ 3 ماهه')
+    btn_6month = types.KeyboardButton('⏱ 6 ماهه')
+    btn_1year = types.KeyboardButton('⏱ 1 ساله')
+    
+    back_btn = types.KeyboardButton('🔙 بازگشت')
+    home_btn = types.KeyboardButton('🏠 منوی اصلی')
+    
+    markup.add(btn_1month, btn_3month, btn_6month, btn_1year, back_btn, home_btn)
+    
+    duration_text = """
+⏱ انتخاب مدت زمان اشتراک
+
+لطفا مدت زمان مورد نظر خود را انتخاب کنید:
+
+🔹 1 ماهه - مناسب برای تست
+🔹 3 ماهه - مناسب برای استفاده کوتاه مدت
+🔹 6 ماهه - مناسب برای استفاده متوسط
+🔹 1 ساله - مناسب برای استفاده طولانی مدت
+
+💡 نکته: مدت زمان طولانی‌تر، قیمت بهتری دارد.
+    """
+    
+    bot.send_message(message.chat.id, duration_text, reply_markup=markup)
+
+# پردازش انتخاب مدت زمان
+@bot.message_handler(func=lambda message: message.text in ['⏱ 1 ماهه', '⏱ 3 ماهه', '⏱ 6 ماهه', '⏱ 1 ساله'])
+def process_duration_plan(message):
+    user_id = message.from_user.id
+    
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
+        start(message)
+        return
+    
+    # تبدیل متن به مدت زمان
+    duration_map = {
+        '⏱ 1 ماهه': '1month',
+        '⏱ 3 ماهه': '3month',
+        '⏱ 6 ماهه': '6month',
+        '⏱ 1 ساله': '1year'
+    }
+    
+    selected_duration = duration_map.get(message.text)
+    if not selected_duration:
+        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
+        return
+    
+    # ذخیره مدت زمان انتخاب شده
+    user_data[user_id]['duration'] = selected_duration
+    update_user_session(user_id, 'duration_selected', {'duration': selected_duration})
     
     # درخواست نام کاربری
     ask_username(message)
 
 # درخواست نام کاربری
 def ask_username(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    back = types.KeyboardButton('🔙 بازگشت')
-    markup.add(back)
+    """درخواست نام کاربری با طراحی بهتر"""
+    user_id = message.from_user.id
     
-    bot.send_message(message.chat.id, 
-                     "👤 لطفا نام کاربری دلخواه خود را وارد کنید:\n"
-                     "(فقط از حروف انگلیسی و اعداد استفاده کنید)", 
-                     reply_markup=markup)
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
+        start(message)
+        return
+    
+    update_user_session(user_id, 'entering_username')
+    
+    markup = create_back_button()
+    
+    username_text = """
+👤 نام کاربری
+
+لطفا نام کاربری مورد نظر خود را وارد کنید:
+
+📝 قوانین نام کاربری:
+• فقط حروف انگلیسی، اعداد و خط تیره
+• حداقل 3 کاراکتر و حداکثر 20 کاراکتر
+• نباید با عدد شروع شود
+• مثال: user123, my-vpn, test_user
+
+💡 نکته: این نام کاربری برای اتصال به سرور استفاده خواهد شد.
+    """
+    
+    bot.send_message(message.chat.id, username_text, reply_markup=markup)
     bot.register_next_step_handler(message, process_username)
 
 # پردازش نام کاربری
 def process_username(message):
-    if message.text == '🔙 بازگشت':
-        show_duration_plans(message)
+    """پردازش نام کاربری با اعتبارسنجی بهتر"""
+    user_id = message.from_user.id
+    
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
+        start(message)
         return
     
-    user_id = message.from_user.id
+    # بررسی دکمه‌های بازگشت
+    if message.text in ['🔙 بازگشت', '🏠 منوی اصلی']:
+        if message.text == '🔙 بازگشت':
+            show_duration_plans(message)
+        else:
+            start(message)
+        return
+    
     username = message.text.strip()
     
-    # بررسی معتبر بودن نام کاربری
-    if not username.isalnum():
-        bot.send_message(message.chat.id, "❌ نام کاربری فقط می‌تواند شامل حروف انگلیسی و اعداد باشد.")
-        ask_username(message)
+    # اعتبارسنجی نام کاربری
+    import re
+    username_pattern = re.compile(r'^[a-zA-Z][a-zA-Z0-9_-]{2,19}$')
+    
+    if not username_pattern.match(username):
+        # افزایش شمارنده تلاش
+        session = get_user_session(user_id)
+        retry_count = session.get('data', {}).get('username_retry', 0) + 1
+        
+        if retry_count >= MAX_RETRIES:
+            bot.send_message(message.chat.id, 
+                           "❌ تعداد تلاش‌های شما به پایان رسید.\n"
+                           "لطفا دوباره از منوی اصلی شروع کنید.")
+            clear_user_session(user_id)
+            start(message)
+            return
+        
+        update_user_session(user_id, 'entering_username', {'username_retry': retry_count})
+        
+        error_text = f"""
+❌ نام کاربری نامعتبر است!
+
+📝 قوانین نام کاربری:
+• فقط حروف انگلیسی، اعداد و خط تیره
+• حداقل 3 کاراکتر و حداکثر 20 کاراکتر
+• باید با حرف شروع شود
+• مثال: user123, my-vpn, test_user
+
+🔄 تلاش {retry_count} از {MAX_RETRIES}
+        """
+        
+        markup = create_back_button()
+        bot.send_message(message.chat.id, error_text, reply_markup=markup)
+        bot.register_next_step_handler(message, process_username)
         return
     
     # ذخیره نام کاربری
     user_data[user_id]['username'] = username
+    update_user_session(user_id, 'username_entered', {'username': username})
     
-    # محاسبه و نمایش قیمت نهایی
+    # نمایش قیمت نهایی
     show_final_price(message)
 
 # محاسبه و نمایش قیمت نهایی
 def show_final_price(message):
+    """نمایش قیمت نهایی با طراحی بهتر"""
     user_id = message.from_user.id
+    
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
+        start(message)
+        return
+    
+    if user_id not in user_data or 'data_plan' not in user_data[user_id] or 'duration' not in user_data[user_id] or 'username' not in user_data[user_id]:
+        bot.send_message(message.chat.id, "❌ اطلاعات ناقص است. لطفا دوباره شروع کنید.")
+        start(message)
+        return
+    
+    # محاسبه قیمت پایه
     data_plan = user_data[user_id]['data_plan']
     duration = user_data[user_id]['duration']
     username = user_data[user_id]['username']
     
-    # محاسبه قیمت
-    base_price = prices[data_plan][duration]
+    # قیمت‌های پایه (به تومان)
+    base_prices = {
+        '1GB': 50000,
+        '2GB': 80000,
+        '5GB': 150000,
+        '10GB': 250000,
+        '20GB': 400000,
+        '50GB': 800000
+    }
     
-    # اعمال تخفیف
-    if discount_percentage > 0:
-        discount_amount = (base_price * discount_percentage) // 100
-        final_price = base_price - discount_amount
-    else:
-        final_price = base_price
-        discount_amount = 0
+    # ضریب مدت زمان
+    duration_multipliers = {
+        '1month': 1.0,
+        '3month': 2.5,  # تخفیف 17%
+        '6month': 4.5,  # تخفیف 25%
+        '1year': 8.0    # تخفیف 33%
+    }
     
-    user_data[user_id]['price'] = final_price
-    user_data[user_id]['base_price'] = base_price
+    base_price = base_prices.get(data_plan, 100000)
+    multiplier = duration_multipliers.get(duration, 1.0)
+    total_price = int(base_price * multiplier)
+    
+    # اعمال تخفیف عمومی
+    discount_amount = int(total_price * discount_percentage / 100)
+    final_price = total_price - discount_amount
+    
+    # ذخیره قیمت‌ها
+    user_data[user_id]['base_price'] = total_price
     user_data[user_id]['discount_amount'] = discount_amount
+    user_data[user_id]['price'] = final_price
     
-    # تبدیل کدهای داخلی به متن قابل نمایش
-    data_text = data_plan.replace('GB', ' گیگابایت')
-    duration_text = duration.replace('month', ' ماهه')
-    if duration == '1month':
-        duration_text = '1 ماهه'
+    update_user_session(user_id, 'price_shown')
     
-    # نمایش خلاصه سفارش
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    confirm = types.KeyboardButton('✅ تأیید و پرداخت')
-    cancel = types.KeyboardButton('❌ انصراف')
-    markup.add(confirm, cancel)
+    # تبدیل به متن فارسی
+    data_plan_text = data_plan.replace('GB', ' گیگابایت')
+    duration_text = {
+        '1month': '1 ماهه',
+        '3month': '3 ماهه',
+        '6month': '6 ماهه',
+        '1year': '1 ساله'
+    }.get(duration, duration)
     
-    price_text = f"🧾 خلاصه سفارش شما:\n\n"
-    price_text += f"حجم: {data_text}\n"
-    price_text += f"مدت: {duration_text}\n"
-    price_text += f"نام کاربری: {username}\n\n"
+    # نمایش اطلاعات سفارش
+    order_summary = f"""
+📋 خلاصه سفارش شما
+
+👤 نام کاربری: `{username}`
+📊 حجم داده: {data_plan_text}
+⏱ مدت زمان: {duration_text}
+
+💰 قیمت‌گذاری:
+"""
     
     if discount_percentage > 0:
-        price_text += f"💰 قیمت اصلی: {base_price:,} تومان\n"
-        price_text += f"🎯 تخفیف: {discount_percentage}% ({discount_amount:,} تومان)\n"
-        price_text += f"💳 مبلغ قابل پرداخت: {final_price:,} تومان\n\n"
+        order_summary += f"""
+• قیمت پایه: {total_price:,} تومان
+• تخفیف ({discount_percentage}%): {discount_amount:,} تومان
+• قیمت نهایی: {final_price:,} تومan
+"""
     else:
-        price_text += f"💳 مبلغ قابل پرداخت: {final_price:,} تومان\n\n"
+        order_summary += f"• قیمت نهایی: {final_price:,} تومان"
     
-    price_text += f"در صورت تأیید، گزینه «تأیید و پرداخت» را انتخاب کنید."
+    order_summary += f"""
+
+✅ آیا می‌خواهید این سفارش را تکمیل کنید؟
+    """
     
-    bot.send_message(message.chat.id, price_text, reply_markup=markup)
-    bot.register_next_step_handler(message, process_payment_confirmation)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    confirm_btn = types.KeyboardButton('✅ تأیید و پرداخت')
+    cancel_btn = types.KeyboardButton('❌ انصراف')
+    back_btn = types.KeyboardButton('🔙 بازگشت')
+    home_btn = types.KeyboardButton('🏠 منوی اصلی')
+    
+    markup.add(confirm_btn, cancel_btn, back_btn, home_btn)
+    
+    bot.send_message(message.chat.id, order_summary, parse_mode="Markdown", reply_markup=markup)
 
 # پردازش تأیید پرداخت
+@bot.message_handler(func=lambda message: message.text in ['✅ تأیید و پرداخت', '❌ انصراف'])
 def process_payment_confirmation(message):
-    if message.text == '❌ انصراف':
-        bot.send_message(message.chat.id, "❌ سفارش شما لغو شد.")
+    user_id = message.from_user.id
+    
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
         start(message)
         return
     
-    if message.text != '✅ تأیید و پرداخت':
-        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
-        # نمایش مجدد صفحه تأیید
-        show_final_price(message)
+    if message.text == '❌ انصراف':
+        markup = create_main_menu()
+        bot.send_message(message.chat.id, 
+                        "❌ سفارش شما لغو شد.\n"
+                        "در صورت نیاز، می‌توانید دوباره خرید کنید.",
+                        reply_markup=markup)
+        clear_user_session(user_id)
         return
     
-    # نمایش اطلاعات پرداخت
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    send_receipt = types.KeyboardButton('📝 ارسال رسید پرداخت')
-    cancel = types.KeyboardButton('❌ انصراف')
-    markup.add(send_receipt, cancel)
+    # بررسی وجود اطلاعات سفارش
+    if user_id not in user_data or 'price' not in user_data[user_id]:
+        bot.send_message(message.chat.id, "❌ اطلاعات سفارش ناقص است. لطفا دوباره شروع کنید.")
+        start(message)
+        return
     
-    bot.send_message(message.chat.id, 
-                     f"💳 لطفا مبلغ {user_data[message.from_user.id]['price']:,} تومان را به شماره کارت زیر واریز کنید:\n\n"
-                     f"`{CARD_NUMBER}`\n"
-                     f"به نام: خلیلی \n\n"
-                     f"پس از پرداخت، گزینه «ارسال رسید پرداخت» را انتخاب کنید و تصویر رسید را ارسال نمایید.",
-                     parse_mode="Markdown",
-                     reply_markup=markup)
+    update_user_session(user_id, 'payment_confirmed')
+    
+    # نمایش اطلاعات پرداخت
+    price = user_data[user_id]['price']
+    data_plan = user_data[user_id]['data_plan'].replace('GB', ' گیگابایت')
+    duration = user_data[user_id]['duration']
+    username = user_data[user_id]['username']
+    
+    duration_text = {
+        '1month': '1 ماهه',
+        '3month': '3 ماهه',
+        '6month': '6 ماهه',
+        '1year': '1 ساله'
+    }.get(duration, duration)
+    
+    payment_info = f"""
+💳 اطلاعات پرداخت
+
+📋 خلاصه سفارش:
+• نام کاربری: `{username}`
+• حجم داده: {data_plan}
+• مدت زمان: {duration_text}
+• مبلغ: {price:,} تومان
+
+🏦 اطلاعات کارت:
+• شماره: `{CARD_NUMBER}`
+• به نام: خلیلی
+
+📸 پس از پرداخت:
+1. روی دکمه «📤 ارسال رسید پرداخت» کلیک کنید
+2. تصویر رسید را ارسال کنید
+3. منتظر تأیید بمانید
+
+⚠️ نکات مهم:
+• حتماً شماره کارت را درست وارد کنید
+• رسید پرداخت را واضح و کامل ارسال کنید
+• در صورت مشکل با پشتیبانی تماس بگیرید
+    """
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    receipt_btn = types.KeyboardButton('📤 ارسال رسید پرداخت')
+    cancel_btn = types.KeyboardButton('❌ انصراف')
+    back_btn = types.KeyboardButton('🔙 بازگشت')
+    home_btn = types.KeyboardButton('🏠 منوی اصلی')
+    
+    markup.add(receipt_btn, cancel_btn, back_btn, home_btn)
+    
+    bot.send_message(message.chat.id, payment_info, parse_mode="Markdown", reply_markup=markup)
     bot.register_next_step_handler(message, process_receipt_option)
 
 # پردازش انتخاب ارسال رسید
+@bot.message_handler(func=lambda message: message.text in ['📤 ارسال رسید پرداخت', '❌ انصراف', '🔙 بازگشت', '🏠 منوی اصلی'])
 def process_receipt_option(message):
-    if message.text == '❌ انصراف':
-        bot.send_message(message.chat.id, "❌ سفارش شما لغو شد.")
+    user_id = message.from_user.id
+    
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
         start(message)
         return
     
-    if message.text != '📝 ارسال رسید پرداخت':
-        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
-        # بازگشت به مرحله قبل
-        process_payment_confirmation(message)
+    if message.text == '❌ انصراف':
+        markup = create_main_menu()
+        bot.send_message(message.chat.id, 
+                        "❌ سفارش شما لغو شد.\n"
+                        "در صورت نیاز، می‌توانید دوباره خرید کنید.",
+                        reply_markup=markup)
+        clear_user_session(user_id)
         return
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    cancel = types.KeyboardButton('❌ انصراف')
-    markup.add(cancel)
+    elif message.text == '🔙 بازگشت':
+        show_final_price(message)
+        return
     
-    bot.send_message(message.chat.id, 
-                     "🧾 لطفا تصویر رسید پرداخت خود را ارسال کنید.",
-                     reply_markup=markup)
+    elif message.text == '🏠 منوی اصلی':
+        start(message)
+        return
+    
+    elif message.text != '📤 ارسال رسید پرداخت':
+        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
+        return
+    
+    update_user_session(user_id, 'uploading_receipt')
+    
+    markup = create_back_button()
+    
+    receipt_instruction = """
+📤 ارسال رسید پرداخت
+
+لطفا تصویر رسید پرداخت خود را ارسال کنید:
+
+📸 نکات مهم:
+• تصویر باید واضح و خوانا باشد
+• شماره تراکنش و مبلغ باید مشخص باشد
+• تاریخ و زمان پرداخت باید قابل مشاهده باشد
+• فرمت‌های قابل قبول: JPG, PNG, PDF
+
+⚠️ توجه: پس از ارسال رسید، منتظر تأیید ادمین بمانید.
+    """
+    
+    bot.send_message(message.chat.id, receipt_instruction, reply_markup=markup)
     bot.register_next_step_handler(message, process_receipt)
 
 # پردازش رسید پرداخت
@@ -1057,6 +1399,12 @@ def process_receipt(message):
         duration = user_data[user_id]['duration']
         if duration == '1month':
             duration_text = '1 ماهه'
+        elif duration == '3month':
+            duration_text = '3 ماهه'
+        elif duration == '6month':
+            duration_text = '6 ماهه'
+        elif duration == '1year':
+            duration_text = '1 ساله'
         
         username = user_data[user_id]['username']
         price = user_data[user_id]['price']
@@ -1999,6 +2347,141 @@ def handle_order_approval(call):
     del pending_orders[order_id]
     
     bot.answer_callback_query(call.id)
+
+# تابع‌های کمکی برای مدیریت جلسات
+def start_user_session(user_id, step='start'):
+    """شروع جلسه جدید برای کاربر"""
+    user_sessions[user_id] = {
+        'step': step,
+        'data': {},
+        'timestamp': time.time()
+    }
+
+def update_user_session(user_id, step=None, data=None):
+    """به‌روزرسانی جلسه کاربر"""
+    if user_id not in user_sessions:
+        start_user_session(user_id)
+    
+    if step:
+        user_sessions[user_id]['step'] = step
+    if data:
+        user_sessions[user_id]['data'].update(data)
+    
+    user_sessions[user_id]['timestamp'] = time.time()
+
+def get_user_session(user_id):
+    """دریافت اطلاعات جلسه کاربر"""
+    return user_sessions.get(user_id)
+
+def clear_user_session(user_id):
+    """پاک کردن جلسه کاربر"""
+    if user_id in user_sessions:
+        del user_sessions[user_id]
+
+def is_session_valid(user_id):
+    """بررسی اعتبار جلسه کاربر"""
+    session = get_user_session(user_id)
+    if not session:
+        return False
+    
+    # بررسی انقضای جلسه
+    if time.time() - session['timestamp'] > SESSION_TIMEOUT:
+        clear_user_session(user_id)
+        return False
+    
+    return True
+
+# تابع‌های کمکی برای بهبود تجربه کاربری
+def create_main_menu():
+    """ایجاد منوی اصلی با طراحی بهتر"""
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    buy_btn = types.KeyboardButton('🛒 خرید فیلترشکن')
+    account_btn = types.KeyboardButton('👤 حساب من')
+    configs_btn = types.KeyboardButton('🔐 کانفیگ‌های من')
+    support_btn = types.KeyboardButton('📞 پشتیبانی')
+    admin_btn = types.KeyboardButton('⚙️ پنل مدیریت')
+    
+    markup.add(buy_btn, account_btn, configs_btn, support_btn)
+    if ADMIN_ID:  # فقط برای ادمین نمایش داده شود
+        markup.add(admin_btn)
+    
+    return markup
+
+def create_back_button():
+    """ایجاد دکمه بازگشت"""
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    back_btn = types.KeyboardButton('🔙 بازگشت')
+    home_btn = types.KeyboardButton('🏠 منوی اصلی')
+    markup.add(back_btn, home_btn)
+    return markup
+
+def send_welcome_message(chat_id, user_name):
+    """ارسال پیام خوش‌آمدگویی بهبود یافته"""
+    welcome_text = f"""
+🎉 سلام {user_name} عزیز!
+
+به ربات فیلترشکن خوش آمدید! 🌟
+
+🔹 برای شروع خرید، روی دکمه «🛒 خرید فیلترشکن» کلیک کنید
+🔹 برای مشاهده حساب کاربری، روی «👤 حساب من» کلیک کنید
+🔹 برای دریافت کانفیگ‌های خریداری شده، روی «🔐 کانفیگ‌های من» کلیک کنید
+🔹 در صورت بروز مشکل، روی «📞 پشتیبانی» کلیک کنید
+
+💡 نکته: تمام پرداخت‌ها امن و محافظت شده هستند.
+    """
+    
+    markup = create_main_menu()
+    bot.send_message(chat_id, welcome_text, reply_markup=markup)
+
+# مدیریت خطاهای عمومی
+@bot.message_handler(func=lambda message: True)
+def handle_all_messages(message):
+    """مدیریت تمام پیام‌های غیرمنتظره"""
+    user_id = message.from_user.id
+    
+    # بررسی مسدودیت
+    if user_id in blocked_users:
+        bot.send_message(message.chat.id, "❌ شما از استفاده از این ربات مسدود شده‌اید.")
+        return
+    
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, 
+                        "⏰ جلسه شما منقضی شده است.\n"
+                        "لطفا دوباره شروع کنید.")
+        start(message)
+        return
+    
+    # پیام راهنما برای پیام‌های غیرمنتظره
+    help_text = """
+❓ پیام شما قابل تشخیص نیست.
+
+🔹 برای استفاده از ربات:
+• از دکمه‌های موجود استفاده کنید
+• یا دستور /start را ارسال کنید
+• یا دستور /help را برای راهنما ارسال کنید
+
+💡 نکته: ربات فقط از دکمه‌ها و دستورات مشخص شده پشتیبانی می‌کند.
+    """
+    
+    markup = create_main_menu()
+    bot.send_message(message.chat.id, help_text, reply_markup=markup)
+
+# تابع برای پاکسازی جلسات منقضی شده
+def cleanup_expired_sessions():
+    """پاکسازی جلسات منقضی شده"""
+    current_time = time.time()
+    expired_sessions = []
+    
+    for user_id, session in user_sessions.items():
+        if current_time - session['timestamp'] > SESSION_TIMEOUT:
+            expired_sessions.append(user_id)
+    
+    for user_id in expired_sessions:
+        clear_user_session(user_id)
+    
+    if expired_sessions:
+        print(f"Cleaned up {len(expired_sessions)} expired sessions")
 
 if __name__ == "__main__":
     import time
