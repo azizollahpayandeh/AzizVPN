@@ -44,6 +44,9 @@ pending_orders = {}  # {order_id: {user_id, order_info}}
 # مدیریت جلسات کاربران
 user_sessions = {}  # {user_id: {'step': 'current_step', 'data': {}, 'timestamp': time.time()}}
 
+# ذخیره پیام‌های پشتیبانی برای پاسخ آسان
+support_messages = {}  # {message_id: {'user_id': int, 'message_text': str, 'timestamp': str}}
+
 # تابع‌های ذخیره‌سازی و بارگذاری داده‌ها
 def save_data():
     """ذخیره تمام داده‌ها در فایل‌های JSON"""
@@ -448,10 +451,24 @@ def process_support_message(message):
             f"💬 پیام:\n{clean_message}"
         )
         
-        # ارسال به ادمین بدون parse_mode
-        sent = bot.send_message(ADMIN_ID, support_msg)
+        # ایجاد دکمه Reply
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        reply_btn = types.InlineKeyboardButton("💬 پاسخ", callback_data=f"reply_{user_id}")
+        markup.add(reply_btn)
+        
+        # ارسال به ادمین با دکمه Reply
+        sent = bot.send_message(ADMIN_ID, support_msg, reply_markup=markup)
         
         if sent:
+            # ذخیره پیام پشتیبانی برای پاسخ آسان
+            support_messages[sent.message_id] = {
+                'user_id': user_id,
+                'message_text': clean_message,
+                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'user_name': user_name,
+                'username': username
+            }
+            
             # تأیید ارسال به کاربر
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
             back = types.KeyboardButton('🔙 بازگشت')
@@ -1812,7 +1829,8 @@ def reply_support_command(message):
         bot.send_message(message.chat.id, 
                         "❌ فرمت صحیح: `/reply [user_id] [پیام پاسخ]`\n\n"
                         "مثال:\n"
-                        "`/reply 123456789 سلام، مشکل شما حل شد`",
+                        "`/reply 123456789 سلام، مشکل شما حل شد`\n\n"
+                        "💡 پیشنهاد: از دکمه «💬 پاسخ» در پیام‌های پشتیبانی استفاده کنید.",
                         parse_mode="Markdown")
         return
     
@@ -1822,12 +1840,14 @@ def reply_support_command(message):
         
         # ارسال پاسخ به کاربر
         try:
-            reply_msg = (
-                f"📞 پاسخ پشتیبانی:\n\n"
-                f"💬 {reply_text}\n\n"
-                f"📅 تاریخ: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"👨‍💼 پشتیبانی AzizVPN"
-            )
+            reply_msg = f"""
+📞 پاسخ پشتیبانی:
+
+{reply_text}
+
+---
+💬 پشتیبانی AzizVPN
+            """
             
             sent = bot.send_message(target_user_id, reply_msg)
             
@@ -1837,6 +1857,13 @@ def reply_support_command(message):
                                f"✅ پاسخ با موفقیت به کاربر `{target_user_id}` ارسال شد.\n\n"
                                f"💬 پاسخ:\n{reply_text}",
                                parse_mode="Markdown")
+                
+                # حذف پیام پشتیبانی از حافظه
+                for msg_id, msg_data in list(support_messages.items()):
+                    if msg_data['user_id'] == target_user_id:
+                        del support_messages[msg_id]
+                        break
+                
                 print(f"Support reply sent to user {target_user_id}")
             else:
                 bot.send_message(ADMIN_ID, 
@@ -1856,35 +1883,105 @@ def support_messages_command(message):
     if message.from_user.id != ADMIN_ID:
         return
     
-    bot.send_message(message.chat.id, 
-                    "📞 برای مشاهده پیام‌های پشتیبانی، لطفا از دستور زیر استفاده کنید:\n\n"
-                    "`/reply [user_id] [پیام پاسخ]`\n\n"
-                    "مثال:\n"
-                    "`/reply 123456789 سلام، مشکل شما حل شد`\n\n"
-                    "💡 پیام‌های پشتیبانی به صورت مستقیم به شما ارسال می‌شوند.",
-                    parse_mode="Markdown")
+    # شمارش پیام‌های در انتظار
+    pending_count = len(support_messages)
+    
+    support_info = f"""
+📞 مدیریت پیام‌های پشتیبانی:
+
+🆕 سیستم جدید پاسخ آسان:
+• هر پیام پشتیبانی دارای دکمه «💬 پاسخ» است
+• با کلیک روی دکمه، می‌توانید مستقیماً پاسخ دهید
+• نیازی به تایپ دستور نیست
+
+📊 آمار فعلی:
+• پیام‌های در انتظار: {pending_count} عدد
+
+📝 روش‌های پاسخ:
+1️⃣ دکمه «💬 پاسخ» (پیشنهادی)
+2️⃣ دستور `/reply [user_id] [پیام]`
+
+💡 نکات مهم:
+• پیام‌های پشتیبانی به صورت مستقیم ارسال می‌شوند
+• پس از پاسخ، پیام از لیست انتظار حذف می‌شود
+• آیدی کاربر در هر پیام قابل مشاهده است
+    """
+    
+    bot.send_message(message.chat.id, support_info)
 
 # نمایش اطلاعات پیام‌های پشتیبانی
 def show_support_info(message):
     if message.from_user.id != ADMIN_ID:
         return
     
+    # شمارش پیام‌های پشتیبانی در انتظار
+    pending_count = len(support_messages)
+    
+    support_info = f"""
+📞 مدیریت پیام‌های پشتیبانی:
+
+🆕 سیستم جدید پاسخ آسان:
+• هر پیام پشتیبانی دارای دکمه «💬 پاسخ» است
+• با کلیک روی دکمه، می‌توانید مستقیماً پاسخ دهید
+• نیازی به تایپ دستور نیست
+
+📊 آمار فعلی:
+• پیام‌های در انتظار: {pending_count} عدد
+
+📝 روش‌های پاسخ:
+1️⃣ دکمه «💬 پاسخ» (پیشنهادی)
+2️⃣ دستور `/reply [user_id] [پیام]`
+
+💡 نکات مهم:
+• پیام‌های پشتیبانی به صورت مستقیم ارسال می‌شوند
+• پس از پاسخ، پیام از لیست انتظار حذف می‌شود
+• آیدی کاربر در هر پیام قابل مشاهده است
+    """
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    list_btn = types.KeyboardButton('📋 لیست پیام‌ها')
+    back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+    markup.add(list_btn, back_btn)
+    
+    bot.send_message(message.chat.id, support_info, reply_markup=markup)
+
+# نمایش لیست پیام‌های پشتیبانی در انتظار
+def show_pending_support_messages(message):
+    """نمایش لیست پیام‌های پشتیبانی در انتظار"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if not support_messages:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back_btn)
+        
+        bot.send_message(message.chat.id, 
+                        "📭 هیچ پیام پشتیبانی در انتظار وجود ندارد.",
+                        reply_markup=markup)
+        return
+    
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    back = types.KeyboardButton('🔙 بازگشت به پنل')
-    markup.add(back)
+    back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+    markup.add(back_btn)
     
-    support_info = (
-        "📞 مدیریت پیام‌های پشتیبانی:\n\n"
-        "💡 پیام‌های پشتیبانی به صورت مستقیم به شما ارسال می‌شوند.\n\n"
-        "📝 دستورات موجود:\n"
-        "• `/reply [user_id] [پیام پاسخ]` - پاسخ به کاربر\n"
-        "• `/support` - راهنمای دستورات\n\n"
-        "📋 مثال:\n"
-        "`/reply 123456789 سلام، مشکل شما حل شد`\n\n"
-        "⚠️ توجه: آیدی کاربر از پیام‌های پشتیبانی قابل مشاهده است."
-    )
+    messages_list = f"📋 لیست پیام‌های پشتیبانی در انتظار ({len(support_messages)} عدد):\n\n"
     
-    bot.send_message(message.chat.id, support_info, parse_mode="Markdown", reply_markup=markup)
+    for i, (msg_id, msg_data) in enumerate(support_messages.items(), 1):
+        user_id = msg_data['user_id']
+        user_name = msg_data['user_name']
+        username = msg_data['username']
+        timestamp = msg_data['timestamp']
+        message_text = msg_data['message_text'][:100] + "..." if len(msg_data['message_text']) > 100 else msg_data['message_text']
+        
+        messages_list += f"{i}. 👤 {user_name} (@{username})\n"
+        messages_list += f"   🆔 آیدی: {user_id}\n"
+        messages_list += f"   📅 تاریخ: {timestamp}\n"
+        messages_list += f"   💬 پیام: {message_text}\n\n"
+    
+    messages_list += "💡 برای پاسخ، روی دکمه «💬 پاسخ» در پیام اصلی کلیک کنید."
+    
+    bot.send_message(message.chat.id, messages_list, reply_markup=markup)
 
 # پاسخ به دکمه‌های کانفیگ کاربر
 @bot.message_handler(func=lambda message: message.text in ['📥 دانلود کانفیگ', '📋 اطلاعات کامل'])
@@ -2348,6 +2445,51 @@ def handle_order_approval(call):
     
     bot.answer_callback_query(call.id)
 
+# پردازش دکمه Reply برای پیام‌های پشتیبانی
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reply_'))
+def handle_support_reply(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "⛔️ شما دسترسی به این عملیات را ندارید.")
+        return
+    
+    user_id = int(call.data.split('_')[1])
+    
+    # بررسی وجود پیام پشتیبانی
+    support_msg = None
+    for msg_id, msg_data in support_messages.items():
+        if msg_data['user_id'] == user_id:
+            support_msg = msg_data
+            break
+    
+    if not support_msg:
+        bot.answer_callback_query(call.id, "❌ پیام پشتیبانی یافت نشد.")
+        return
+    
+    # درخواست پیام پاسخ از ادمین
+    reply_instruction = f"""
+💬 پاسخ به پیام پشتیبانی
+
+👤 کاربر: {support_msg['user_name']} (@{support_msg['username']})
+🆔 آیدی: {user_id}
+📅 تاریخ پیام: {support_msg['timestamp']}
+
+💬 پیام کاربر:
+{support_msg['message_text']}
+
+📝 لطفا پیام پاسخ خود را بنویسید:
+    """
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    cancel_btn = types.KeyboardButton('❌ انصراف')
+    markup.add(cancel_btn)
+    
+    bot.send_message(call.message.chat.id, reply_instruction, reply_markup=markup)
+    
+    # ثبت مرحله بعدی برای دریافت پیام پاسخ
+    bot.register_next_step_handler(call.message, lambda msg: process_admin_reply(msg, user_id))
+    
+    bot.answer_callback_query(call.id)
+
 # تابع‌های کمکی برای مدیریت جلسات
 def start_user_session(user_id, step='start'):
     """شروع جلسه جدید برای کاربر"""
@@ -2482,6 +2624,73 @@ def cleanup_expired_sessions():
     
     if expired_sessions:
         print(f"Cleaned up {len(expired_sessions)} expired sessions")
+
+# پردازش پاسخ ادمین به پیام پشتیبانی
+def process_admin_reply(message, target_user_id):
+    """پردازش پاسخ ادمین به پیام پشتیبانی"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if message.text == '❌ انصراف':
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back_btn)
+        
+        bot.send_message(message.chat.id, 
+                        "❌ پاسخ لغو شد.",
+                        reply_markup=markup)
+        return
+    
+    reply_text = message.text
+    
+    try:
+        # ارسال پاسخ به کاربر
+        admin_reply = f"""
+📞 پاسخ پشتیبانی:
+
+{reply_text}
+
+---
+💬 پشتیبانی AzizVPN
+        """
+        
+        sent = bot.send_message(target_user_id, admin_reply)
+        
+        if sent:
+            # تأیید ارسال به ادمین
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+            back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+            markup.add(back_btn)
+            
+            bot.send_message(message.chat.id, 
+                           f"✅ پاسخ شما با موفقیت به کاربر `{target_user_id}` ارسال شد.",
+                           parse_mode="Markdown",
+                           reply_markup=markup)
+            
+            # حذف پیام پشتیبانی از حافظه
+            for msg_id, msg_data in list(support_messages.items()):
+                if msg_data['user_id'] == target_user_id:
+                    del support_messages[msg_id]
+                    break
+            
+            print(f"Admin reply sent to user {target_user_id}")
+        else:
+            bot.send_message(message.chat.id, 
+                           f"❌ خطا در ارسال پاسخ به کاربر `{target_user_id}`.",
+                           parse_mode="Markdown")
+    
+    except Exception as e:
+        error_msg = f"❌ خطا در ارسال پاسخ: {str(e)}"
+        bot.send_message(message.chat.id, error_msg)
+        print(f"Error sending admin reply to user {target_user_id}: {e}")
+
+# پاسخ به دکمه‌های مدیریت پشتیبانی
+@bot.message_handler(func=lambda message: message.text == '📋 لیست پیام‌ها')
+def support_list_handler(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    show_pending_support_messages(message)
 
 if __name__ == "__main__":
     import time
