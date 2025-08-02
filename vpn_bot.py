@@ -33,6 +33,9 @@ configs_db = {}
 discount_percentage = 0  # درصد تخفیف عمومی
 orders_db = {}  # ذخیره سفارشات
 
+# حافظه موقت برای سفارشات در انتظار تأیید
+pending_orders = {}  # {order_id: {user_id, order_info}}
+
 # تابع‌های ذخیره‌سازی و بارگذاری داده‌ها
 def save_data():
     """ذخیره تمام داده‌ها در فایل‌های JSON"""
@@ -985,7 +988,7 @@ def process_payment_confirmation(message):
     bot.send_message(message.chat.id, 
                      f"💳 لطفا مبلغ {user_data[message.from_user.id]['price']:,} تومان را به شماره کارت زیر واریز کنید:\n\n"
                      f"`{CARD_NUMBER}`\n"
-                     f"به نام: پاینده \n\n"
+                     f"به نام: خلیلی \n\n"
                      f"پس از پرداخت، گزینه «ارسال رسید پرداخت» را انتخاب کنید و تصویر رسید را ارسال نمایید.",
                      parse_mode="Markdown",
                      reply_markup=markup)
@@ -1058,7 +1061,22 @@ def process_receipt(message):
         base_price = user_data[user_id].get('base_price', price)
         discount_amount = user_data[user_id].get('discount_amount', 0)
         
-        # ارسال اطلاعات سفارش به ادمین
+        # ایجاد شناسه سفارش
+        order_id = f"order_{user_id}_{int(time.time())}"
+        
+        # ذخیره اطلاعات سفارش در انتظار تأیید
+        pending_orders[order_id] = {
+            'user_id': user_id,
+            'data_plan': data_plan,
+            'duration': duration_text,
+            'username': username,
+            'price': price,
+            'base_price': base_price,
+            'discount_amount': discount_amount,
+            'order_time': user_data[user_id]['order_time']
+        }
+        
+        # ارسال اطلاعات سفارش به ادمین با دکمه‌های تأیید/لغو
         admin_msg = (
             f"🔔 سفارش جدید:\n\n"
             f"🆔 آیدی کاربر: `{user_id}`\n"
@@ -1075,10 +1093,15 @@ def process_receipt(message):
             admin_msg += f"💰 مبلغ: {price:,} تومان\n"
         
         admin_msg += f"🕒 زمان سفارش: {user_data[user_id]['order_time']}\n\n"
-        admin_msg += f"برای ارسال کانفیگ از دستور زیر استفاده کنید:\n"
-        admin_msg += f"`/send_config {user_id}`"
+        admin_msg += f"لطفا تأیید یا رد کنید:"
         
-        sent = bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
+        # ایجاد دکمه‌های تأیید و لغو
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        approve_btn = types.InlineKeyboardButton("✅ تایید", callback_data=f"approve_{order_id}")
+        reject_btn = types.InlineKeyboardButton("❌ لغو", callback_data=f"reject_{order_id}")
+        markup.add(approve_btn, reject_btn)
+        
+        sent = bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown", reply_markup=markup)
         print(f"Order info sent to admin: {ADMIN_ID}, send status: {sent != None}")
         
         # ارسال پیام تشکر به کاربر
@@ -1258,21 +1281,51 @@ def admin_back_handler(message):
     if message.text == '🔙 بازگشت به پنل':
         show_admin_panel(message)
 
-# دستور ارسال کانفیگ توسط ادمین
-@bot.message_handler(commands=['send_config'])
-def send_config_command(message):
+# دستور ارسال کانفیگ توسط ادمین (غیرفعال شده - جایگزین شده با دکمه‌های تأیید/لغو)
+# @bot.message_handler(commands=['send_config'])
+# def send_config_command(message):
+#     user_id = message.from_user.id
+#     
+#     # بررسی دسترسی ادمین
+#     if user_id != ADMIN_ID:
+#         bot.send_message(message.chat.id, "⛔️ شما دسترسی به این دستور را ندارید.")
+#         print(f"Unauthorized access to send_config: User ID {user_id}, Admin ID {ADMIN_ID}")
+#         return
+#     
+#     # بررسی فرمت دستور
+#     command_parts = message.text.split()
+#     if len(command_parts) != 2:
+#         bot.send_message(message.chat.id, "❌ فرمت صحیح: `/send_config [chat_id]`", parse_mode="Markdown")
+#         return
+#     
+#     try:
+#         target_user_id = int(command_parts[1])
+#         
+#         # درخواست فایل کانفیگ
+#         bot.send_message(message.chat.id, 
+#                          f"📁 لطفا فایل کانفیگ برای کاربر `{target_user_id}` را ارسال کنید:",
+#                          parse_mode="Markdown")
+#         
+#         # ثبت مرحله بعدی
+#         bot.register_next_step_handler(message, lambda msg: process_config_file(msg, target_user_id))
+#         
+#     except ValueError:
+#         bot.send_message(message.chat.id, "❌ شناسه کاربر باید عددی باشد.")
+
+# دستور ارسال دستی کانفیگ (برای موارد خاص)
+@bot.message_handler(commands=['manual_config'])
+def manual_config_command(message):
     user_id = message.from_user.id
     
     # بررسی دسترسی ادمین
     if user_id != ADMIN_ID:
         bot.send_message(message.chat.id, "⛔️ شما دسترسی به این دستور را ندارید.")
-        print(f"Unauthorized access to send_config: User ID {user_id}, Admin ID {ADMIN_ID}")
         return
     
     # بررسی فرمت دستور
     command_parts = message.text.split()
     if len(command_parts) != 2:
-        bot.send_message(message.chat.id, "❌ فرمت صحیح: `/send_config [chat_id]`", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "❌ فرمت صحیح: `/manual_config [chat_id]`", parse_mode="Markdown")
         return
     
     try:
@@ -1290,7 +1343,7 @@ def send_config_command(message):
         bot.send_message(message.chat.id, "❌ شناسه کاربر باید عددی باشد.")
 
 # پردازش فایل کانفیگ ارسالی توسط ادمین
-def process_config_file(message, target_user_id):
+def process_config_file(message, target_user_id, order_id=None):
     # بررسی دسترسی ادمین
     if message.from_user.id != ADMIN_ID:
         print(f"Unauthorized access to process_config_file: User ID {message.from_user.id}, Admin ID {ADMIN_ID}")
@@ -1868,6 +1921,82 @@ def generate_pure_vless_config(username, data_plan, duration):
     pure_config = f"vless://{server_config['uuid']}@{server_config['server']}:{server_config['port']}?type={server_config['type']}&path={server_config['path']}&host={server_config['host']}&mode=auto&security={server_config['security']}#AzizVPN-{username}"
     
     return pure_config
+
+# پردازش دکمه‌های تأیید/لغو سفارش
+@bot.callback_query_handler(func=lambda call: call.data.startswith(('approve_', 'reject_')))
+def handle_order_approval(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "⛔️ شما دسترسی به این عملیات را ندارید.")
+        return
+    
+    action, order_id = call.data.split('_', 1)
+    
+    if order_id not in pending_orders:
+        bot.answer_callback_query(call.id, "❌ سفارش یافت نشد.")
+        return
+    
+    order_info = pending_orders[order_id]
+    user_id = order_info['user_id']
+    
+    if action == 'approve':
+        # تأیید سفارش - درخواست فایل کانفیگ
+        bot.edit_message_text(
+            f"✅ سفارش تأیید شد!\n\n"
+            f"🆔 آیدی کاربر: `{user_id}`\n"
+            f"👤 نام کاربری: `{order_info['username']}`\n"
+            f"📊 حجم: {order_info['data_plan']}\n"
+            f"⏱ مدت: {order_info['duration']}\n"
+            f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
+            f"📁 لطفا فایل کانفیگ را ارسال کنید:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+        # ثبت مرحله بعدی برای دریافت فایل کانفیگ
+        bot.register_next_step_handler(call.message, lambda msg: process_config_file(msg, user_id, order_id))
+        
+        # ارسال پیام تأیید به کاربر
+        try:
+            bot.send_message(user_id, 
+                           "✅ سفارش شما تأیید شد!\n\n"
+                           "فایل کانفیگ در حال آماده‌سازی است و به زودی برای شما ارسال خواهد شد.\n\n"
+                           "🙏 از صبر شما متشکریم.")
+        except Exception as e:
+            print(f"Error sending approval message to user {user_id}: {e}")
+    
+    elif action == 'reject':
+        # رد سفارش و مسدود کردن کاربر
+        bot.edit_message_text(
+            f"❌ سفارش رد شد!\n\n"
+            f"🆔 آیدی کاربر: `{user_id}`\n"
+            f"👤 نام کاربری: `{order_info['username']}`\n"
+            f"📊 حجم: {order_info['data_plan']}\n"
+            f"⏱ مدت: {order_info['duration']}\n"
+            f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
+            f"🚫 کاربر مسدود شد.",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+        # مسدود کردن کاربر
+        blocked_users.add(user_id)
+        save_data()
+        
+        # ارسال پیام رد به کاربر
+        try:
+            bot.send_message(user_id, 
+                           "❌ سفارش شما رد شد!\n\n"
+                           "اطلاعات ارسالی شما صحیح نبوده است.\n"
+                           "لطفا با پشتیبانی تماس بگیرید.")
+        except Exception as e:
+            print(f"Error sending rejection message to user {user_id}: {e}")
+    
+    # حذف سفارش از لیست انتظار
+    del pending_orders[order_id]
+    
+    bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
     import time
