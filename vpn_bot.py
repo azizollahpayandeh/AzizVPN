@@ -6,10 +6,12 @@ import json
 from datetime import datetime
 
 # تنظیمات اولیه
-BOT_TOKEN = "7251591978:AAEL-ZAh6KzvbPHnR2ySyTXw2FdrOGiAV4c"
-ADMIN_ID = 995380371  # آیدی عددی ادمین را اینجا وارد کنید
-ADMIN_USERNAME = "@azizVPN"  # یوزرنیم ادمین
-CARD_NUMBER = "6277-6011-1054-5199"  # شماره کارت برای پرداخت
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
+CARD_NUMBER = os.getenv("CARD_NUMBER")
+
 
 # فایل‌های ذخیره‌سازی
 DATA_FILES = {
