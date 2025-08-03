@@ -47,6 +47,9 @@ user_sessions = {}  # {user_id: {'step': 'current_step', 'data': {}, 'timestamp'
 # ذخیره پیام‌های پشتیبانی برای پاسخ آسان
 support_messages = {}  # {message_id: {'user_id': int, 'message_text': str, 'timestamp': str}}
 
+# درخواست‌های نمایندگی در انتظار تأیید
+representation_requests = {}  # {request_id: {'user_id': int, 'user_info': dict, 'timestamp': str}}
+
 # تابع‌های ذخیره‌سازی و بارگذاری داده‌ها
 def save_data():
     """ذخیره تمام داده‌ها در فایل‌های JSON"""
@@ -174,7 +177,10 @@ def start(message):
             'join_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             'orders': [],
             'total_spent': 0,
-            'configs': []
+            'configs': [],
+            'is_representative': False,  # وضعیت نمایندگی
+            'representative_discount': 0,  # درصد تخفیف نمایندگی
+            'representation_date': None  # تاریخ تأیید نمایندگی
         }
         save_data()
         print(f"New user registered: {user_id} ({user_name})")
@@ -217,7 +223,7 @@ def help_command(message):
     bot.send_message(message.chat.id, help_text, reply_markup=markup)
 
 # پاسخ به دکمه‌های اصلی
-@bot.message_handler(func=lambda message: message.text in ['🛒 خرید فیلترشکن', '👤 حساب من', '🔐 کانفیگ‌های من', '📞 پشتیبانی', '⚙️ پنل مدیریت'])
+@bot.message_handler(func=lambda message: message.text in ['🛒 خرید فیلترشکن', '👤 حساب من', '🔐 کانفیگ‌های من', '📞 پشتیبانی', '🏢 درخواست نمایندگی', '⚙️ پنل مدیریت'])
 def main_menu_handler(message):
     user_id = message.from_user.id
     
@@ -253,11 +259,165 @@ def main_menu_handler(message):
                         reply_markup=markup)
         bot.register_next_step_handler(message, process_support_message)
         
+    elif message.text == '🏢 درخواست نمایندگی':
+        show_representation_request(message)
+        
     elif message.text == '⚙️ پنل مدیریت':
         if user_id == ADMIN_ID:
             show_admin_panel(message)
         else:
             bot.send_message(message.chat.id, "⛔️ شما دسترسی به این بخش را ندارید.")
+
+# نمایش درخواست نمایندگی
+def show_representation_request(message):
+    """نمایش صفحه درخواست نمایندگی"""
+    user_id = message.from_user.id
+    
+    # بررسی مسدودیت
+    if user_id in blocked_users:
+        bot.send_message(message.chat.id, "❌ شما از استفاده از این ربات مسدود شده‌اید.")
+        return
+    
+    # بررسی اینکه آیا کاربر قبلاً نماینده است
+    if user_id in users_db and users_db[user_id].get('is_representative', False):
+        markup = create_main_menu()
+        bot.send_message(message.chat.id, 
+                        "🏢 شما قبلاً نماینده تأیید شده‌اید!\n\n"
+                        f"🎯 درصد تخفیف شما: {users_db[user_id].get('representative_discount', 0)}%\n"
+                        f"📅 تاریخ تأیید: {users_db[user_id].get('representation_date', 'نامشخص')}\n\n"
+                        "💡 این تخفیف در تمام خریدهای شما اعمال می‌شود.",
+                        reply_markup=markup)
+        return
+    
+    update_user_session(user_id, 'representation_request')
+    
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    yes_btn = types.KeyboardButton('✅ بله')
+    no_btn = types.KeyboardButton('❌ خیر')
+    back_btn = types.KeyboardButton('🔙 بازگشت')
+    home_btn = types.KeyboardButton('🏠 منوی اصلی')
+    markup.add(yes_btn, no_btn, back_btn, home_btn)
+    
+    representation_info = """
+🏢 درخواست نمایندگی
+
+آیا می‌خواهید برای نمایندگی درخواست کنید؟
+
+🎯 مزایای نمایندگی:
+• تخفیف ویژه روی تمام خریدها
+• قیمت‌های مخصوص نمایندگان
+• پشتیبانی ویژه
+• امکان فروش به مشتریان
+
+📋 شرایط نمایندگی:
+• حداقل 3 خرید موفق
+• فعالیت منظم در ربات
+• رعایت قوانین و مقررات
+
+💡 پس از تأیید، تخفیف مخصوص به حساب شما اعمال خواهد شد.
+    """
+    
+    bot.send_message(message.chat.id, representation_info, reply_markup=markup)
+
+# پردازش درخواست نمایندگی
+@bot.message_handler(func=lambda message: message.text in ['✅ بله', '❌ خیر'])
+def process_representation_request(message):
+    user_id = message.from_user.id
+    
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
+        start(message)
+        return
+    
+    if message.text == '❌ خیر':
+        markup = create_main_menu()
+        bot.send_message(message.chat.id, 
+                        "❌ درخواست نمایندگی لغو شد.\n"
+                        "در صورت نیاز، می‌توانید دوباره درخواست دهید.",
+                        reply_markup=markup)
+        return
+    
+    elif message.text == '✅ بله':
+        # ارسال درخواست به ادمین
+        send_representation_request_to_admin(message)
+        return
+
+# ارسال درخواست نمایندگی به ادمین
+def send_representation_request_to_admin(message):
+    user_id = message.from_user.id
+    
+    # اطلاعات کاربر
+    user_info = users_db.get(user_id, {})
+    user_name = user_info.get('first_name', 'نامشخص')
+    username = user_info.get('username', 'نامشخص')
+    join_date = user_info.get('join_date', 'نامشخص')
+    total_orders = len(user_info.get('orders', []))
+    total_spent = user_info.get('total_spent', 0)
+    
+    # ایجاد شناسه درخواست
+    request_id = f"rep_{user_id}_{int(time.time())}"
+    
+    # ذخیره درخواست
+    representation_requests[request_id] = {
+        'user_id': user_id,
+        'user_info': {
+            'first_name': user_name,
+            'username': username,
+            'join_date': join_date,
+            'total_orders': total_orders,
+            'total_spent': total_spent
+        },
+        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    # پیام به ادمین
+    admin_msg = f"""
+🏢 درخواست نمایندگی جدید:
+
+👤 اطلاعات کاربر:
+• نام: {user_name}
+• یوزرنیم: @{username}
+• آیدی: `{user_id}`
+• تاریخ عضویت: {join_date}
+• تعداد سفارشات: {total_orders}
+• کل هزینه: {total_spent:,} تومان
+
+📅 تاریخ درخواست: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+آیا می‌خواهید این کاربر را نماینده کنید؟
+    """
+    
+    # ایجاد دکمه‌های تأیید/رد
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    approve_btn = types.InlineKeyboardButton("✅ تأیید نمایندگی", callback_data=f"approve_rep_{request_id}")
+    reject_btn = types.InlineKeyboardButton("❌ رد درخواست", callback_data=f"reject_rep_{request_id}")
+    markup.add(approve_btn, reject_btn)
+    
+    try:
+        sent = bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown", reply_markup=markup)
+        
+        if sent:
+            # تأیید به کاربر
+            markup = create_main_menu()
+            bot.send_message(message.chat.id, 
+                           "✅ درخواست نمایندگی شما با موفقیت ارسال شد!\n\n"
+                           "📞 ادمین درخواست شما را بررسی خواهد کرد.\n"
+                           "🔔 پس از بررسی، نتیجه به شما اطلاع داده خواهد شد.\n\n"
+                           "🙏 از صبر شما متشکریم.",
+                           reply_markup=markup)
+            
+            print(f"Representation request sent to admin from user {user_id}")
+        else:
+            bot.send_message(message.chat.id, 
+                           "❌ خطا در ارسال درخواست.\n"
+                           "لطفا دوباره تلاش کنید.")
+    
+    except Exception as e:
+        print(f"Error sending representation request: {e}")
+        bot.send_message(message.chat.id, 
+                        "❌ خطا در ارسال درخواست نمایندگی.\n"
+                        "لطفا با پشتیبانی تماس بگیرید.")
 
 # پاسخ به دکمه‌های پنل مدیریت
 @bot.message_handler(func=lambda message: message.text in ['👥 مدیریت کاربران', '📊 آمار ربات', '🔐 مدیریت کانفیگ‌ها', '📢 پیام همگانی', '💰 مدیریت تخفیف', '🚫 مدیریت مسدودیت', '📞 پیام‌های پشتیبانی', '🔄 تست ارسال به ادمین'])
@@ -313,7 +473,20 @@ def show_user_account(message):
 • یوزرنیم: @{user.get('username', 'نامشخص')}
 • تاریخ عضویت: {join_date}
 
-📈 آمار خرید:
+"""
+    
+    # نمایش وضعیت نمایندگی
+    if user.get('is_representative', False):
+        representative_discount = user.get('representative_discount', 0)
+        representation_date = user.get('representation_date', 'نامشخص')
+        account_info += f"""🏢 وضعیت نمایندگی:
+• وضعیت: ✅ نماینده تأیید شده
+• درصد تخفیف: {representative_discount}%
+• تاریخ تأیید: {representation_date}
+
+"""
+    
+    account_info += f"""📈 آمار خرید:
 • تعداد سفارشات: {total_orders} عدد
 • کل هزینه: {total_spent:,} تومان
 • کانفیگ‌های فعال: {active_configs} عدد
@@ -323,7 +496,13 @@ def show_user_account(message):
     if total_orders > 0:
         account_info += "📋 آخرین سفارشات:\n"
         for i, order in enumerate(orders[-3:], 1):  # نمایش 3 سفارش آخر
-            data_plan = order.get('data_plan', '').replace('GB', ' گیگابایت')
+            data_plan = order.get('data_plan', '')
+            # تبدیل فرمت داده
+            if 'GB' in data_plan:
+                data_plan_text = data_plan.replace('GB', ' گیگابایت')
+            else:
+                data_plan_text = data_plan
+            
             duration = order.get('duration', '')
             price = order.get('price', 0)
             order_time = order.get('order_time', 'نامشخص')
@@ -335,8 +514,8 @@ def show_user_account(message):
                 '1year': '1 ساله'
             }.get(duration, duration)
             
-            account_info += f"• {i}. {data_plan} - {duration_text} - {price:,} تومان\n"
-            account_info += f"  📅 {order_time}\n\n"
+            account_info += f"• {i}. {data_plan_text} - {duration_text} - {price:,} تومان\n"
+            account_info += f"  �� {order_time}\n\n"
     
     markup = create_main_menu()
     bot.send_message(message.chat.id, account_info, reply_markup=markup)
@@ -922,11 +1101,12 @@ def show_data_plans(message):
     btn_10gb = types.KeyboardButton('📊 10 گیگابایت')
     btn_20gb = types.KeyboardButton('📊 20 گیگابایت')
     btn_50gb = types.KeyboardButton('📊 50 گیگابایت')
+    btn_custom = types.KeyboardButton('📝 حجم دلخواه')
     
     back_btn = types.KeyboardButton('🔙 بازگشت')
     home_btn = types.KeyboardButton('🏠 منوی اصلی')
     
-    markup.add(btn_1gb, btn_2gb, btn_5gb, btn_10gb, btn_20gb, btn_50gb, back_btn, home_btn)
+    markup.add(btn_1gb, btn_2gb, btn_5gb, btn_10gb, btn_20gb, btn_50gb, btn_custom, back_btn, home_btn)
     
     plans_text = """
 📊 انتخاب حجم داده
@@ -939,6 +1119,7 @@ def show_data_plans(message):
 🔹 10 گیگابایت - مناسب برای دانلود
 🔹 20 گیگابایت - مناسب برای استفاده سنگین
 🔹 50 گیگابایت - مناسب برای استفاده حرفه‌ای
+🔹 حجم دلخواه - هر حجمی که می‌خواهید
 
 💡 نکته: حجم انتخاب شده برای مدت زمان مشخصی معتبر خواهد بود.
     """
@@ -946,7 +1127,7 @@ def show_data_plans(message):
     bot.send_message(message.chat.id, plans_text, reply_markup=markup)
 
 # پردازش انتخاب حجم داده
-@bot.message_handler(func=lambda message: message.text in ['📊 1 گیگابایت', '📊 2 گیگابایت', '📊 5 گیگابایت', '📊 10 گیگابایت', '📊 20 گیگابایت', '📊 50 گیگابایت'])
+@bot.message_handler(func=lambda message: message.text in ['📊 1 گیگابایت', '📊 2 گیگابایت', '📊 5 گیگابایت', '📊 10 گیگابایت', '📊 20 گیگابایت', '📊 50 گیگابایت', '📝 حجم دلخواه'])
 def process_data_plan(message):
     user_id = message.from_user.id
     
@@ -959,6 +1140,28 @@ def process_data_plan(message):
     # ایجاد حافظه موقت برای کاربر
     if user_id not in user_data:
         user_data[user_id] = {}
+    
+    if message.text == '📝 حجم دلخواه':
+        # درخواست حجم دلخواه از کاربر
+        update_user_session(user_id, 'entering_custom_volume')
+        markup = create_back_button()
+        
+        custom_volume_text = """
+📝 حجم دلخواه
+
+لطفا حجم مورد نظر خود را به گیگابایت وارد کنید:
+
+💡 مثال: 15 (برای 15 گیگابایت)
+💡 قیمت هر گیگابایت: 3,000 تومان
+💡 حداقل حجم: 1 گیگابایت
+💡 حداکثر حجم: 100 گیگابایت
+
+📝 فقط عدد وارد کنید (بدون واحد):
+        """
+        
+        bot.send_message(message.chat.id, custom_volume_text, reply_markup=markup)
+        bot.register_next_step_handler(message, process_custom_volume)
+        return
     
     # تبدیل متن به حجم داده
     data_plan_map = {
@@ -981,6 +1184,50 @@ def process_data_plan(message):
     
     # نمایش زمان‌های اشتراک
     show_duration_plans(message)
+
+# پردازش حجم دلخواه
+def process_custom_volume(message):
+    """پردازش حجم دلخواه وارد شده توسط کاربر"""
+    user_id = message.from_user.id
+    
+    # بررسی اعتبار جلسه
+    if not is_session_valid(user_id):
+        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
+        start(message)
+        return
+    
+    # بررسی دکمه‌های بازگشت
+    if message.text in ['🔙 بازگشت', '🏠 منوی اصلی']:
+        if message.text == '🔙 بازگشت':
+            show_data_plans(message)
+        else:
+            start(message)
+        return
+    
+    try:
+        volume = float(message.text.strip())
+        
+        # اعتبارسنجی حجم
+        if volume < 1 or volume > 100:
+            bot.send_message(message.chat.id, 
+                           "❌ حجم باید بین 1 تا 100 گیگابایت باشد.\n"
+                           "لطفا دوباره وارد کنید:")
+            bot.register_next_step_handler(message, process_custom_volume)
+            return
+        
+        # ذخیره حجم دلخواه
+        user_data[user_id]['data_plan'] = f'{int(volume)}GB'
+        user_data[user_id]['custom_volume'] = int(volume)
+        update_user_session(user_id, 'custom_volume_entered', {'custom_volume': int(volume)})
+        
+        # نمایش زمان‌های اشتراک
+        show_duration_plans(message)
+        
+    except ValueError:
+        bot.send_message(message.chat.id, 
+                        "❌ لطفا یک عدد معتبر وارد کنید.\n"
+                        "مثال: 15 (برای 15 گیگابایت)")
+        bot.register_next_step_handler(message, process_custom_volume)
 
 # نمایش پلن‌های زمانی
 def show_duration_plans(message):
@@ -1171,15 +1418,19 @@ def show_final_price(message):
     duration = user_data[user_id]['duration']
     username = user_data[user_id]['username']
     
-    # قیمت‌های پایه (به تومان)
-    base_prices = {
-        '1GB': 50000,
-        '2GB': 80000,
-        '5GB': 150000,
-        '10GB': 250000,
-        '20GB': 400000,
-        '50GB': 800000
-    }
+    # استخراج حجم داده (به گیگابایت)
+    if 'custom_volume' in user_data[user_id]:
+        # حجم دلخواه
+        data_gb = user_data[user_id]['custom_volume']
+    else:
+        # حجم از پیش تعریف شده
+        data_gb = int(data_plan.replace('GB', ''))
+    
+    # قیمت هر گیگابایت: 3000 تومان
+    price_per_gb = 3000
+    
+    # محاسبه قیمت پایه بر اساس حجم
+    base_price = data_gb * price_per_gb
     
     # ضریب مدت زمان
     duration_multipliers = {
@@ -1189,23 +1440,33 @@ def show_final_price(message):
         '1year': 8.0    # تخفیف 33%
     }
     
-    base_price = base_prices.get(data_plan, 100000)
     multiplier = duration_multipliers.get(duration, 1.0)
     total_price = int(base_price * multiplier)
     
     # اعمال تخفیف عمومی
-    discount_amount = int(total_price * discount_percentage / 100)
-    final_price = total_price - discount_amount
+    general_discount_amount = int(total_price * discount_percentage / 100)
+    price_after_general_discount = total_price - general_discount_amount
+    
+    # اعمال تخفیف نمایندگی (اگر کاربر نماینده است)
+    representative_discount_amount = 0
+    final_price = price_after_general_discount
+    
+    if user_id in users_db and users_db[user_id].get('is_representative', False):
+        representative_discount = users_db[user_id].get('representative_discount', 0)
+        representative_discount_amount = int(price_after_general_discount * representative_discount / 100)
+        final_price = price_after_general_discount - representative_discount_amount
     
     # ذخیره قیمت‌ها
     user_data[user_id]['base_price'] = total_price
-    user_data[user_id]['discount_amount'] = discount_amount
+    user_data[user_id]['general_discount_amount'] = general_discount_amount
+    user_data[user_id]['representative_discount_amount'] = representative_discount_amount
     user_data[user_id]['price'] = final_price
+    user_data[user_id]['data_gb'] = data_gb
     
     update_user_session(user_id, 'price_shown')
     
     # تبدیل به متن فارسی
-    data_plan_text = data_plan.replace('GB', ' گیگابایت')
+    data_plan_text = f"{data_gb} گیگابایت"
     duration_text = {
         '1month': '1 ماهه',
         '3month': '3 ماهه',
@@ -1222,31 +1483,30 @@ def show_final_price(message):
 ⏱ مدت زمان: {duration_text}
 
 💰 قیمت‌گذاری:
+• قیمت پایه ({data_gb} گیگ × {price_per_gb:,} تومان): {total_price:,} تومان
 """
     
     if discount_percentage > 0:
-        order_summary += f"""
-• قیمت پایه: {total_price:,} تومان
-• تخفیف ({discount_percentage}%): {discount_amount:,} تومان
-• قیمت نهایی: {final_price:,} تومan
-"""
-    else:
-        order_summary += f"• قیمت نهایی: {final_price:,} تومان"
+        order_summary += f"• تخفیف عمومی ({discount_percentage}%): {general_discount_amount:,} تومان\n"
+    
+    if representative_discount_amount > 0:
+        representative_discount = users_db[user_id].get('representative_discount', 0)
+        order_summary += f"• تخفیف نمایندگی ({representative_discount}%): {representative_discount_amount:,} تومان\n"
     
     order_summary += f"""
+• قیمت نهایی: {final_price:,} تومان
 
 ✅ آیا می‌خواهید این سفارش را تکمیل کنید؟
-    """
+"""
     
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     confirm_btn = types.KeyboardButton('✅ تأیید و پرداخت')
     cancel_btn = types.KeyboardButton('❌ انصراف')
     back_btn = types.KeyboardButton('🔙 بازگشت')
     home_btn = types.KeyboardButton('🏠 منوی اصلی')
-    
     markup.add(confirm_btn, cancel_btn, back_btn, home_btn)
     
-    bot.send_message(message.chat.id, order_summary, parse_mode="Markdown", reply_markup=markup)
+    bot.send_message(message.chat.id, order_summary, reply_markup=markup, parse_mode="Markdown")
 
 # پردازش تأیید پرداخت
 @bot.message_handler(func=lambda message: message.text in ['✅ تأیید و پرداخت', '❌ انصراف'])
@@ -1278,7 +1538,7 @@ def process_payment_confirmation(message):
     
     # نمایش اطلاعات پرداخت
     price = user_data[user_id]['price']
-    data_plan = user_data[user_id]['data_plan'].replace('GB', ' گیگابایت')
+    data_gb = user_data[user_id].get('data_gb', int(user_data[user_id]['data_plan'].replace('GB', '')))
     duration = user_data[user_id]['duration']
     username = user_data[user_id]['username']
     
@@ -1294,7 +1554,7 @@ def process_payment_confirmation(message):
 
 📋 خلاصه سفارش:
 • نام کاربری: `{username}`
-• حجم داده: {data_plan}
+• حجم داده: {data_gb} گیگابایت
 • مدت زمان: {duration_text}
 • مبلغ: {price:,} تومان
 
@@ -1412,7 +1672,7 @@ def process_receipt(message):
         print(f"Receipt forwarded to admin: {ADMIN_ID}, forward status: {forwarded != None}")
         
         # اطلاعات سفارش
-        data_plan = user_data[user_id]['data_plan'].replace('GB', ' گیگابایت')
+        data_gb = user_data[user_id].get('data_gb', int(user_data[user_id]['data_plan'].replace('GB', '')))
         duration = user_data[user_id]['duration']
         if duration == '1month':
             duration_text = '1 ماهه'
@@ -1426,7 +1686,8 @@ def process_receipt(message):
         username = user_data[user_id]['username']
         price = user_data[user_id]['price']
         base_price = user_data[user_id].get('base_price', price)
-        discount_amount = user_data[user_id].get('discount_amount', 0)
+        general_discount_amount = user_data[user_id].get('general_discount_amount', 0)
+        representative_discount_amount = user_data[user_id].get('representative_discount_amount', 0)
         
         # ایجاد شناسه سفارش
         order_id = f"order_{user_id}_{int(time.time())}"
@@ -1434,12 +1695,13 @@ def process_receipt(message):
         # ذخیره اطلاعات سفارش در انتظار تأیید
         pending_orders[order_id] = {
             'user_id': user_id,
-            'data_plan': data_plan,
+            'data_plan': f"{data_gb} گیگابایت",
             'duration': duration_text,
             'username': username,
             'price': price,
             'base_price': base_price,
-            'discount_amount': discount_amount,
+            'general_discount_amount': general_discount_amount,
+            'representative_discount_amount': representative_discount_amount,
             'order_time': user_data[user_id]['order_time']
         }
         
@@ -1448,17 +1710,21 @@ def process_receipt(message):
             f"🔔 سفارش جدید:\n\n"
             f"🆔 آیدی کاربر: `{user_id}`\n"
             f"👤 نام کاربری: `{username}`\n"
-            f"📊 حجم: {data_plan}\n"
+            f"📊 حجم: {data_gb} گیگابایت\n"
             f"⏱ مدت: {duration_text}\n"
         )
         
-        if discount_percentage > 0:
-            admin_msg += f"💰 قیمت اصلی: {base_price:,} تومان\n"
-            admin_msg += f"🎯 تخفیف: {discount_percentage}% ({discount_amount:,} تومان)\n"
-            admin_msg += f"💳 مبلغ نهایی: {price:,} تومان\n"
-        else:
-            admin_msg += f"💰 مبلغ: {price:,} تومان\n"
+        # نمایش اطلاعات قیمت‌گذاری
+        admin_msg += f"💰 قیمت پایه: {base_price:,} تومان\n"
         
+        if general_discount_amount > 0:
+            admin_msg += f"🎯 تخفیف عمومی ({discount_percentage}%): {general_discount_amount:,} تومان\n"
+        
+        if representative_discount_amount > 0:
+            representative_discount = users_db[user_id].get('representative_discount', 0)
+            admin_msg += f"🏢 تخفیف نمایندگی ({representative_discount}%): {representative_discount_amount:,} تومان\n"
+        
+        admin_msg += f"💳 مبلغ نهایی: {price:,} تومان\n"
         admin_msg += f"🕒 زمان سفارش: {user_data[user_id]['order_time']}\n\n"
         admin_msg += f"لطفا تأیید یا رد کنید:"
         
@@ -2490,6 +2756,155 @@ def handle_support_reply(call):
     
     bot.answer_callback_query(call.id)
 
+# پردازش دکمه‌های تأیید/رد نمایندگی
+@bot.callback_query_handler(func=lambda call: call.data.startswith(('approve_rep_', 'reject_rep_')))
+def handle_representation_approval(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "⛔️ شما دسترسی به این عملیات را ندارید.")
+        return
+    
+    action, request_id = call.data.split('_', 2)[1:]
+    
+    if request_id not in representation_requests:
+        bot.answer_callback_query(call.id, "❌ درخواست نمایندگی یافت نشد.")
+        return
+    
+    request_data = representation_requests[request_id]
+    user_id = request_data['user_id']
+    user_info = request_data['user_info']
+    
+    if action == 'approve':
+        # درخواست درصد تخفیف از ادمین
+        discount_instruction = f"""
+🏢 تأیید نمایندگی
+
+👤 کاربر: {user_info['first_name']} (@{user_info['username']})
+🆔 آیدی: `{user_id}`
+📅 تاریخ عضویت: {user_info['join_date']}
+📦 تعداد سفارشات: {user_info['total_orders']}
+💰 کل هزینه: {user_info['total_spent']:,} تومان
+
+📝 لطفا درصد تخفیف نمایندگی را وارد کنید (مثال: 10, 20, 50):
+        """
+        
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        cancel_btn = types.KeyboardButton('❌ انصراف')
+        markup.add(cancel_btn)
+        
+        bot.send_message(call.message.chat.id, discount_instruction, parse_mode="Markdown", reply_markup=markup)
+        
+        # ثبت مرحله بعدی برای دریافت درصد تخفیف
+        bot.register_next_step_handler(call.message, lambda msg: process_representation_discount(msg, user_id, request_id))
+        
+        # به‌روزرسانی پیام
+        bot.edit_message_text(
+            f"✅ درخواست نمایندگی تأیید شد!\n\n"
+            f"👤 کاربر: {user_info['first_name']} (@{user_info['username']})\n"
+            f"🆔 آیدی: `{user_id}`\n\n"
+            f"📝 لطفا درصد تخفیف را وارد کنید:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+    elif action == 'reject':
+        # رد درخواست نمایندگی
+        bot.edit_message_text(
+            f"❌ درخواست نمایندگی رد شد!\n\n"
+            f"👤 کاربر: {user_info['first_name']} (@{user_info['username']})\n"
+            f"🆔 آیدی: `{user_id}`\n\n"
+            f"📅 تاریخ رد: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+        # ارسال پیام رد به کاربر
+        try:
+            bot.send_message(user_id, 
+                           "❌ درخواست نمایندگی شما رد شد.\n\n"
+                           "💡 می‌توانید در آینده دوباره درخواست دهید.")
+        except Exception as e:
+            print(f"Error sending rejection message to user {user_id}: {e}")
+        
+        # حذف درخواست از لیست
+        del representation_requests[request_id]
+    
+    bot.answer_callback_query(call.id)
+
+# پردازش درصد تخفیف نمایندگی
+def process_representation_discount(message, user_id, request_id):
+    """پردازش درصد تخفیف نمایندگی"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if message.text == '❌ انصراف':
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back_btn)
+        
+        bot.send_message(message.chat.id, 
+                        "❌ تأیید نمایندگی لغو شد.",
+                        reply_markup=markup)
+        return
+    
+    try:
+        discount_percent = int(message.text)
+        
+        if discount_percent < 0 or discount_percent > 100:
+            bot.send_message(message.chat.id, 
+                           "❌ درصد تخفیف باید بین 0 تا 100 باشد.\n"
+                           "لطفا دوباره وارد کنید:")
+            bot.register_next_step_handler(message, lambda msg: process_representation_discount(msg, user_id, request_id))
+            return
+        
+        # تأیید نمایندگی و اعمال تخفیف
+        if user_id in users_db:
+            users_db[user_id]['is_representative'] = True
+            users_db[user_id]['representative_discount'] = discount_percent
+            users_db[user_id]['representation_date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_data()
+        
+        # ارسال پیام تأیید به کاربر
+        try:
+            approval_msg = f"""
+🎉 تبریک! نمایندگی شما تأیید شد!
+
+🏢 وضعیت: نماینده تأیید شده
+🎯 درصد تخفیف: {discount_percent}%
+📅 تاریخ تأیید: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+💡 این تخفیف در تمام خریدهای شما اعمال خواهد شد.
+            """
+            
+            bot.send_message(user_id, approval_msg)
+        except Exception as e:
+            print(f"Error sending approval message to user {user_id}: {e}")
+        
+        # تأیید به ادمین
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back_btn)
+        
+        bot.send_message(message.chat.id, 
+                        f"✅ نمایندگی کاربر `{user_id}` با موفقیت تأیید شد!\n\n"
+                        f"🎯 درصد تخفیف: {discount_percent}%\n"
+                        f"📅 تاریخ تأیید: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        parse_mode="Markdown",
+                        reply_markup=markup)
+        
+        # حذف درخواست از لیست
+        if request_id in representation_requests:
+            del representation_requests[request_id]
+        
+        print(f"Representation approved for user {user_id} with {discount_percent}% discount")
+        
+    except ValueError:
+        bot.send_message(message.chat.id, 
+                        "❌ لطفا یک عدد معتبر وارد کنید.\n"
+                        "مثال: 10, 20, 50")
+        bot.register_next_step_handler(message, lambda msg: process_representation_discount(msg, user_id, request_id))
+
 # تابع‌های کمکی برای مدیریت جلسات
 def start_user_session(user_id, step='start'):
     """شروع جلسه جدید برای کاربر"""
@@ -2541,9 +2956,10 @@ def create_main_menu():
     account_btn = types.KeyboardButton('👤 حساب من')
     configs_btn = types.KeyboardButton('🔐 کانفیگ‌های من')
     support_btn = types.KeyboardButton('📞 پشتیبانی')
+    representation_btn = types.KeyboardButton('🏢 درخواست نمایندگی')
     admin_btn = types.KeyboardButton('⚙️ پنل مدیریت')
     
-    markup.add(buy_btn, account_btn, configs_btn, support_btn)
+    markup.add(buy_btn, account_btn, configs_btn, support_btn, representation_btn)
     if ADMIN_ID:  # فقط برای ادمین نمایش داده شود
         markup.add(admin_btn)
     
