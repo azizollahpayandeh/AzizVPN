@@ -368,8 +368,9 @@ def send_representation_request_to_admin(message):
     total_orders = len(user_info.get('orders', []))
     total_spent = user_info.get('total_spent', 0)
     
-    # ایجاد شناسه درخواست
-    request_id = f"rep_{user_id}_{int(time.time())}"
+    # ایجاد شناسه درخواست (کوتاه‌تر برای جلوگیری از محدودیت callback_data)
+    timestamp = int(time.time()) % 1000000
+    request_id = f"{user_id}_{timestamp}"
     
     # ذخیره درخواست
     representation_requests[request_id] = {
@@ -406,8 +407,8 @@ def send_representation_request_to_admin(message):
     
     # ایجاد دکمه‌های تأیید/رد
     markup = types.InlineKeyboardMarkup(row_width=2)
-    approve_btn = types.InlineKeyboardButton("✅ تأیید نمایندگی", callback_data=f"approve_rep_{request_id}")
-    reject_btn = types.InlineKeyboardButton("❌ رد درخواست", callback_data=f"reject_rep_{request_id}")
+    approve_btn = types.InlineKeyboardButton("✅ تأیید نمایندگی", callback_data=f"app_rep_{request_id}")
+    reject_btn = types.InlineKeyboardButton("❌ رد درخواست", callback_data=f"rej_rep_{request_id}")
     markup.add(approve_btn, reject_btn)
     
     try:
@@ -2651,80 +2652,92 @@ def generate_pure_vless_config(username, data_plan, duration):
     
     return pure_config
 
-# پردازش دکمه‌های تأیید/لغو سفارش
-@bot.callback_query_handler(func=lambda call: call.data.startswith(('approve_', 'reject_')))
-def handle_order_approval(call):
+# پردازش دکمه‌های تأیید/رد نمایندگی
+@bot.callback_query_handler(func=lambda call: call.data.startswith(('app_rep_', 'rej_rep_')))
+def handle_representation_approval(call):
     if call.from_user.id != ADMIN_ID:
         bot.answer_callback_query(call.id, "⛔️ شما دسترسی به این عملیات را ندارید.")
         return
     
-    action, order_id = call.data.split('_', 1)
-    
-    if order_id not in pending_orders:
-        bot.answer_callback_query(call.id, "❌ سفارش یافت نشد.")
+    # پارس کردن callback_data به درستی
+    if call.data.startswith('app_rep_'):
+        action = 'approve'
+        request_id = call.data.replace('app_rep_', '')
+    elif call.data.startswith('rej_rep_'):
+        action = 'reject'
+        request_id = call.data.replace('rej_rep_', '')
+    else:
+        bot.answer_callback_query(call.id, "❌ داده callback نامعتبر است.")
         return
     
-    order_info = pending_orders[order_id]
-    user_id = order_info['user_id']
+    if request_id not in representation_requests:
+        bot.answer_callback_query(call.id, "❌ درخواست نمایندگی یافت نشد.")
+        return
+    
+    request_data = representation_requests[request_id]
+    user_id = request_data['user_id']
+    user_info = request_data['user_info']
     
     if action == 'approve':
-        # تأیید سفارش - درخواست فایل کانفیگ
+        # درخواست درصد تخفیف از ادمین
+        discount_instruction = f"""
+🏢 تأیید نمایندگی
+
+👤 کاربر: {user_info['first_name']} (@{user_info['username']})
+🆔 آیدی: `{user_id}`
+📅 تاریخ عضویت: {user_info['join_date']}
+📦 تعداد سفارشات: {user_info['total_orders']}
+💰 کل هزینه: {user_info['total_spent']:,} تومان
+
+📝 لطفا درصد تخفیف نمایندگی را وارد کنید (مثال: 10, 20, 50):
+        """
+        
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        cancel_btn = types.KeyboardButton('❌ انصراف')
+        markup.add(cancel_btn)
+        
+        # ارسال پیام جدید برای دریافت درصد تخفیف
+        bot.send_message(call.message.chat.id, discount_instruction, parse_mode="Markdown", reply_markup=markup)
+        
+        # ثبت مرحله بعدی برای دریافت درصد تخفیف
+        bot.register_next_step_handler(call.message, lambda msg: process_representation_discount(msg, user_id, request_id))
+        
+        # به‌روزرسانی پیام اصلی
         bot.edit_message_text(
-            f"✅ سفارش تأیید شد!\n\n"
-            f"🆔 آیدی کاربر: `{user_id}`\n"
-            f"👤 نام کاربری: `{order_info['username']}`\n"
-            f"📊 حجم: {order_info['data_plan']}\n"
-            f"⏱ مدت: {order_info['duration']}\n"
-            f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
-            f"📁 لطفا فایل کانفیگ را ارسال کنید:",
+            f"✅ درخواست نمایندگی تأیید شد!\n\n"
+            f"👤 کاربر: {user_info['first_name']} (@{user_info['username']})\n"
+            f"🆔 آیدی: `{user_id}`\n\n"
+            f"📝 لطفا درصد تخفیف را وارد کنید:",
             call.message.chat.id,
             call.message.message_id,
             parse_mode="Markdown"
         )
         
-        # ثبت مرحله بعدی برای دریافت فایل کانفیگ
-        bot.register_next_step_handler(call.message, lambda msg: process_config_file(msg, user_id, order_id))
-        
-        # ارسال پیام تأیید به کاربر
-        try:
-            bot.send_message(user_id, 
-                           "✅ سفارش شما تأیید شد!\n\n"
-                           "فایل کانفیگ در حال آماده‌سازی است و به زودی برای شما ارسال خواهد شد.\n\n"
-                           "🙏 از صبر شما متشکریم.")
-        except Exception as e:
-            print(f"Error sending approval message to user {user_id}: {e}")
-    
     elif action == 'reject':
-        # رد سفارش و مسدود کردن کاربر
+        # رد درخواست نمایندگی
         bot.edit_message_text(
-            f"❌ سفارش رد شد!\n\n"
-            f"🆔 آیدی کاربر: `{user_id}`\n"
-            f"👤 نام کاربری: `{order_info['username']}`\n"
-            f"📊 حجم: {order_info['data_plan']}\n"
-            f"⏱ مدت: {order_info['duration']}\n"
-            f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
-            f"🚫 کاربر مسدود شد.",
+            f"❌ درخواست نمایندگی رد شد!\n\n"
+            f"👤 کاربر: {user_info['first_name']} (@{user_info['username']})\n"
+            f"🆔 آیدی: `{user_id}`\n\n"
+            f"📅 تاریخ رد: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             call.message.chat.id,
             call.message.message_id,
             parse_mode="Markdown"
         )
-        
-        # مسدود کردن کاربر
-        blocked_users.add(user_id)
-        save_data()
         
         # ارسال پیام رد به کاربر
         try:
             bot.send_message(user_id, 
-                           "❌ سفارش شما رد شد!\n\n"
-                           "اطلاعات ارسالی شما صحیح نبوده است.\n"
-                           "لطفا با پشتیبانی تماس بگیرید.")
+                           "❌ درخواست نمایندگی شما رد شد.\n\n"
+                           "💡 می‌توانید در آینده دوباره درخواست دهید.")
         except Exception as e:
             print(f"Error sending rejection message to user {user_id}: {e}")
-    
-    # حذف سفارش از لیست انتظار
-    del pending_orders[order_id]
-    
+        
+        # حذف درخواست از لیست
+        if request_id in representation_requests:
+            del representation_requests[request_id]
+            save_data()
+        
     bot.answer_callback_query(call.id)
 
 # پردازش دکمه Reply برای پیام‌های پشتیبانی
@@ -2771,165 +2784,6 @@ def handle_support_reply(call):
     bot.register_next_step_handler(call.message, lambda msg: process_admin_reply(msg, user_id))
     
     bot.answer_callback_query(call.id)
-
-# پردازش دکمه‌های تأیید/رد نمایندگی
-@bot.callback_query_handler(func=lambda call: call.data.startswith(('approve_rep_', 'reject_rep_')))
-def handle_representation_approval(call):
-    if call.from_user.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "⛔️ شما دسترسی به این عملیات را ندارید.")
-        return
-    
-    # پارس کردن callback_data به درستی
-    parts = call.data.split('_')
-    if len(parts) < 3:
-        bot.answer_callback_query(call.id, "❌ داده callback نامعتبر است.")
-        return
-    
-    action = parts[1]  # approve یا reject
-    request_id = '_'.join(parts[2:])  # بقیه قسمت‌ها به عنوان request_id
-    
-    print(f"Debug: action={action}, request_id={request_id}")
-    print(f"Debug: representation_requests keys: {list(representation_requests.keys())}")
-    
-    if request_id not in representation_requests:
-        bot.answer_callback_query(call.id, "❌ درخواست نمایندگی یافت نشد.")
-        return
-    
-    request_data = representation_requests[request_id]
-    user_id = request_data['user_id']
-    user_info = request_data['user_info']
-    
-    if action == 'approve':
-        # درخواست درصد تخفیف از ادمین
-        discount_instruction = f"""
-🏢 تأیید نمایندگی
-
-👤 کاربر: {user_info['first_name']} (@{user_info['username']})
-🆔 آیدی: `{user_id}`
-📅 تاریخ عضویت: {user_info['join_date']}
-📦 تعداد سفارشات: {user_info['total_orders']}
-💰 کل هزینه: {user_info['total_spent']:,} تومان
-
-📝 لطفا درصد تخفیف نمایندگی را وارد کنید (مثال: 10, 20, 50):
-        """
-        
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        cancel_btn = types.KeyboardButton('❌ انصراف')
-        markup.add(cancel_btn)
-        
-        bot.send_message(call.message.chat.id, discount_instruction, parse_mode="Markdown", reply_markup=markup)
-        
-        # ثبت مرحله بعدی برای دریافت درصد تخفیف
-        bot.register_next_step_handler(call.message, lambda msg: process_representation_discount(msg, user_id, request_id))
-        
-        # به‌روزرسانی پیام
-        bot.edit_message_text(
-            f"✅ درخواست نمایندگی تأیید شد!\n\n"
-            f"👤 کاربر: {user_info['first_name']} (@{user_info['username']})\n"
-            f"🆔 آیدی: `{user_id}`\n\n"
-            f"📝 لطفا درصد تخفیف را وارد کنید:",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
-        )
-        
-    elif action == 'reject':
-        # رد درخواست نمایندگی
-        bot.edit_message_text(
-            f"❌ درخواست نمایندگی رد شد!\n\n"
-            f"👤 کاربر: {user_info['first_name']} (@{user_info['username']})\n"
-            f"🆔 آیدی: `{user_id}`\n\n"
-            f"📅 تاریخ رد: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
-        )
-        
-        # ارسال پیام رد به کاربر
-        try:
-            bot.send_message(user_id, 
-                           "❌ درخواست نمایندگی شما رد شد.\n\n"
-                           "💡 می‌توانید در آینده دوباره درخواست دهید.")
-        except Exception as e:
-            print(f"Error sending rejection message to user {user_id}: {e}")
-        
-        # حذف درخواست از لیست
-        del representation_requests[request_id]
-    
-    bot.answer_callback_query(call.id)
-
-# پردازش درصد تخفیف نمایندگی
-def process_representation_discount(message, user_id, request_id):
-    """پردازش درصد تخفیف نمایندگی"""
-    if message.from_user.id != ADMIN_ID:
-        return
-    
-    if message.text == '❌ انصراف':
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
-        markup.add(back_btn)
-        
-        bot.send_message(message.chat.id, 
-                        "❌ تأیید نمایندگی لغو شد.",
-                        reply_markup=markup)
-        return
-    
-    try:
-        discount_percent = int(message.text)
-        
-        if discount_percent < 0 or discount_percent > 100:
-            bot.send_message(message.chat.id, 
-                           "❌ درصد تخفیف باید بین 0 تا 100 باشد.\n"
-                           "لطفا دوباره وارد کنید:")
-            bot.register_next_step_handler(message, lambda msg: process_representation_discount(msg, user_id, request_id))
-            return
-        
-        # تأیید نمایندگی و اعمال تخفیف
-        if user_id in users_db:
-            users_db[user_id]['is_representative'] = True
-            users_db[user_id]['representative_discount'] = discount_percent
-            users_db[user_id]['representation_date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            save_data()
-        
-        # ارسال پیام تأیید به کاربر
-        try:
-            approval_msg = f"""
-🎉 تبریک! نمایندگی شما تأیید شد!
-
-🏢 وضعیت: نماینده تأیید شده
-🎯 درصد تخفیف: {discount_percent}%
-📅 تاریخ تأیید: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-💡 این تخفیف در تمام خریدهای شما اعمال خواهد شد.
-            """
-            
-            bot.send_message(user_id, approval_msg)
-        except Exception as e:
-            print(f"Error sending approval message to user {user_id}: {e}")
-        
-        # تأیید به ادمین
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
-        markup.add(back_btn)
-        
-        bot.send_message(message.chat.id, 
-                        f"✅ نمایندگی کاربر `{user_id}` با موفقیت تأیید شد!\n\n"
-                        f"🎯 درصد تخفیف: {discount_percent}%\n"
-                        f"📅 تاریخ تأیید: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                        parse_mode="Markdown",
-                        reply_markup=markup)
-        
-        # حذف درخواست از لیست
-        if request_id in representation_requests:
-            del representation_requests[request_id]
-        
-        print(f"Representation approved for user {user_id} with {discount_percent}% discount")
-        
-    except ValueError:
-        bot.send_message(message.chat.id, 
-                        "❌ لطفا یک عدد معتبر وارد کنید.\n"
-                        "مثال: 10, 20, 50")
-        bot.register_next_step_handler(message, lambda msg: process_representation_discount(msg, user_id, request_id))
 
 # تابع‌های کمکی برای مدیریت جلسات
 def start_user_session(user_id, step='start'):
@@ -3006,7 +2860,7 @@ def send_welcome_message(chat_id, user_name):
 
 به ربات فیلترشکن خوش آمدید! 🌟
 
-🔹 برای شروع خرید، روی دکمه «🛒 خرید فیلترشکن» کلیک کنید
+�� برای شروع خرید، روی دکمه «🛒 خرید فیلترشکن» کلیک کنید
 🔹 برای مشاهده حساب کاربری، روی «👤 حساب من» کلیک کنید
 🔹 برای دریافت کانفیگ‌های خریداری شده، روی «🔐 کانفیگ‌های من» کلیک کنید
 🔹 در صورت بروز مشکل، روی «📞 پشتیبانی» کلیک کنید
@@ -3133,6 +2987,156 @@ def support_list_handler(message):
         return
     
     show_pending_support_messages(message)
+
+# پردازش درصد تخفیف نمایندگی
+def process_representation_discount(message, user_id, request_id):
+    """پردازش درصد تخفیف نمایندگی"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    if message.text == '❌ انصراف':
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back_btn)
+        
+        bot.send_message(message.chat.id, 
+                        "❌ تأیید نمایندگی لغو شد.",
+                        reply_markup=markup)
+        return
+    
+    try:
+        discount_percent = int(message.text)
+        
+        if discount_percent < 0 or discount_percent > 100:
+            bot.send_message(message.chat.id, 
+                           "❌ درصد تخفیف باید بین 0 تا 100 باشد.\n"
+                           "لطفا دوباره وارد کنید:")
+            bot.register_next_step_handler(message, lambda msg: process_representation_discount(msg, user_id, request_id))
+            return
+        
+        # تأیید نمایندگی و اعمال تخفیف
+        if user_id in users_db:
+            users_db[user_id]['is_representative'] = True
+            users_db[user_id]['representative_discount'] = discount_percent
+            users_db[user_id]['representation_date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_data()
+        
+        # ارسال پیام تأیید به کاربر
+        try:
+            approval_msg = f"""
+🎉 تبریک! نمایندگی شما تأیید شد!
+
+🏢 وضعیت: نماینده تأیید شده
+🎯 درصد تخفیف: {discount_percent}%
+📅 تاریخ تأیید: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+💡 این تخفیف در تمام خریدهای شما اعمال خواهد شد.
+            """
+            
+            bot.send_message(user_id, approval_msg)
+        except Exception as e:
+            print(f"Error sending approval message to user {user_id}: {e}")
+        
+        # تأیید به ادمین
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        back_btn = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back_btn)
+        
+        bot.send_message(message.chat.id, 
+                        f"✅ نمایندگی کاربر `{user_id}` با موفقیت تأیید شد!\n\n"
+                        f"🎯 درصد تخفیف: {discount_percent}%\n"
+                        f"📅 تاریخ تأیید: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        parse_mode="Markdown",
+                        reply_markup=markup)
+        
+        # حذف درخواست از لیست
+        if request_id in representation_requests:
+            del representation_requests[request_id]
+            save_data()
+        
+        print(f"Representation approved for user {user_id} with {discount_percent}% discount")
+        
+    except ValueError:
+        bot.send_message(message.chat.id, 
+                        "❌ لطفا یک عدد معتبر وارد کنید.\n"
+                        "مثال: 10, 20, 50")
+        bot.register_next_step_handler(message, lambda msg: process_representation_discount(msg, user_id, request_id))
+
+# پردازش دکمه‌های تأیید/لغو سفارش
+@bot.callback_query_handler(func=lambda call: call.data.startswith(('approve_', 'reject_')))
+def handle_order_approval(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "⛔️ شما دسترسی به این عملیات را ندارید.")
+        return
+    
+    action, order_id = call.data.split('_', 1)
+    
+    if order_id not in pending_orders:
+        bot.answer_callback_query(call.id, "❌ سفارش یافت نشد.")
+        return
+    
+    order_info = pending_orders[order_id]
+    user_id = order_info['user_id']
+    
+    if action == 'approve':
+        # تأیید سفارش - درخواست فایل کانفیگ
+        bot.edit_message_text(
+            f"✅ سفارش تأیید شد!\n\n"
+            f"🆔 آیدی کاربر: `{user_id}`\n"
+            f"👤 نام کاربری: `{order_info['username']}`\n"
+            f"📊 حجم: {order_info['data_plan']}\n"
+            f"⏱ مدت: {order_info['duration']}\n"
+            f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
+            f"📁 لطفا فایل کانفیگ را ارسال کنید:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+        # ثبت مرحله بعدی برای دریافت فایل کانفیگ
+        bot.register_next_step_handler(call.message, lambda msg: process_config_file(msg, user_id, order_id))
+        
+        # ارسال پیام تأیید به کاربر
+        try:
+            bot.send_message(user_id, 
+                           "✅ سفارش شما تأیید شد!\n\n"
+                           "فایل کانفیگ در حال آماده‌سازی است و به زودی برای شما ارسال خواهد شد.\n\n"
+                           "🙏 از صبر شما متشکریم.")
+        except Exception as e:
+            print(f"Error sending approval message to user {user_id}: {e}")
+    
+    elif action == 'reject':
+        # رد سفارش و مسدود کردن کاربر
+        bot.edit_message_text(
+            f"❌ سفارش رد شد!\n\n"
+            f"🆔 آیدی کاربر: `{user_id}`\n"
+            f"👤 نام کاربری: `{order_info['username']}`\n"
+            f"📊 حجم: {order_info['data_plan']}\n"
+            f"⏱ مدت: {order_info['duration']}\n"
+            f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
+            f"🚫 کاربر مسدود شد.",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        
+        # مسدود کردن کاربر
+        blocked_users.add(user_id)
+        save_data()
+        
+        # ارسال پیام رد به کاربر
+        try:
+            bot.send_message(user_id, 
+                           "❌ سفارش شما رد شد!\n\n"
+                           "اطلاعات ارسالی شما صحیح نبوده است.\n"
+                           "لطفا با پشتیبانی تماس بگیرید.")
+        except Exception as e:
+            print(f"Error sending rejection message to user {user_id}: {e}")
+    
+    # حذف سفارش از لیست انتظار
+    del pending_orders[order_id]
+    
+    bot.answer_callback_query(call.id)
 
 if __name__ == "__main__":
     import time
