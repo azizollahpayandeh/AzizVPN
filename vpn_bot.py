@@ -573,17 +573,11 @@ def show_user_configs(message):
         order_time = order.get('order_time', 'نامشخص')
         
         # تبدیل نام‌های انگلیسی به فارسی
-        if data_plan == '30GB':
-            data_plan_fa = '30 گیگابایت'
-        elif data_plan == '50GB':
-            data_plan_fa = '50 گیگابایت'
-        elif data_plan == '70GB':
-            data_plan_fa = '70 گیگابایت'
-        elif data_plan == '100GB':
-            data_plan_fa = '100 گیگابایت'
-        elif data_plan == '150GB':
-            data_plan_fa = '150 گیگابایت'
+        if data_plan.endswith('GB'):
+            # برای حجم‌های دلخواه (مثل 45GB, 67GB, etc.)
+            data_plan_fa = f"{data_plan.replace('GB', '')} گیگابایت"
         else:
+            # برای سایر موارد
             data_plan_fa = data_plan
         
         if duration == '1month':
@@ -1122,8 +1116,8 @@ def show_data_plans(message):
 لطفا حجم مورد نظر خود را وارد کنید:
 
 💡 قیمت هر گیگابایت: 3,000 تومان
-💡 حداقل حجم: 1 گیگابایت
-💡 حداکثر حجم: 100 گیگابایت
+💡 حداقل حجم: 30 گیگابایت
+💡 حداکثر حجم: 150 گیگابایت
 
 📝 روی "حجم دلخواه" کلیک کنید و حجم مورد نظر خود را وارد کنید.
     """
@@ -1154,10 +1148,10 @@ def process_data_plan(message):
 
 لطفا حجم مورد نظر خود را به گیگابایت وارد کنید:
 
-💡 مثال: 17 (برای 17 گیگابایت)
+💡 مثال: 50 (برای 50 گیگابایت)
 💡 قیمت هر گیگابایت: 3,000 تومان
-💡 حداقل حجم: 1 گیگابایت
-💡 حداکثر حجم: 100 گیگابایت
+💡 حداقل حجم: 30 گیگابایت
+💡 حداکثر حجم: 150 گیگابایت
 
 📝 فقط عدد وارد کنید (بدون واحد):
     """
@@ -1185,16 +1179,16 @@ def process_custom_volume(message):
         volume = float(message.text)
         
         # بررسی محدودیت‌ها
-        if volume < 1:
+        if volume < 30:
             bot.send_message(message.chat.id, 
-                           "❌ حداقل حجم 1 گیگابایت است.\n"
+                           "❌ حداقل حجم 30 گیگابایت است.\n"
                            "لطفا دوباره وارد کنید:")
             bot.register_next_step_handler(message, process_custom_volume)
             return
         
-        if volume > 100:
+        if volume > 150:
             bot.send_message(message.chat.id, 
-                           "❌ حداکثر حجم 100 گیگابایت است.\n"
+                           "❌ حداکثر حجم 150 گیگابایت است.\n"
                            "لطفا دوباره وارد کنید:")
             bot.register_next_step_handler(message, process_custom_volume)
             return
@@ -1225,7 +1219,7 @@ def process_custom_volume(message):
     except ValueError:
         bot.send_message(message.chat.id, 
                         "❌ لطفا یک عدد معتبر وارد کنید.\n"
-                        "مثال: 17")
+                        "مثال: 50")
         bot.register_next_step_handler(message, process_custom_volume)
 
 def handle_volume_confirmation(message):
@@ -2352,17 +2346,11 @@ def show_download_options(message):
         duration = order.get('duration', 'نامشخص')
         
         # تبدیل نام‌های انگلیسی به فارسی
-        if data_plan == '30GB':
-            data_plan_fa = '30 گیگابایت'
-        elif data_plan == '50GB':
-            data_plan_fa = '50 گیگابایت'
-        elif data_plan == '70GB':
-            data_plan_fa = '70 گیگابایت'
-        elif data_plan == '100GB':
-            data_plan_fa = '100 گیگابایت'
-        elif data_plan == '150GB':
-            data_plan_fa = '150 گیگابایت'
+        if data_plan.endswith('GB'):
+            # برای حجم‌های دلخواه (مثل 45GB, 67GB, etc.)
+            data_plan_fa = f"{data_plan.replace('GB', '')} گیگابایت"
         else:
+            # برای سایر موارد
             data_plan_fa = data_plan
         
         if duration == '1month':
@@ -2409,17 +2397,11 @@ def process_config_download(message):
         duration = order.get('duration', 'نامشخص')
         
         # تبدیل نام‌های انگلیسی به فارسی
-        if data_plan == '30GB':
-            data_plan_fa = '30 گیگابایت'
-        elif data_plan == '50GB':
-            data_plan_fa = '50 گیگابایت'
-        elif data_plan == '70GB':
-            data_plan_fa = '70 گیگابایت'
-        elif data_plan == '100GB':
-            data_plan_fa = '100 گیگابایت'
-        elif data_plan == '150GB':
-            data_plan_fa = '150 گیگابایت'
+        if data_plan.endswith('GB'):
+            # برای حجم‌های دلخواه (مثل 45GB, 67GB, etc.)
+            data_plan_fa = f"{data_plan.replace('GB', '')} گیگابایت"
         else:
+            # برای سایر موارد
             data_plan_fa = data_plan
         
         if duration == '1month':
