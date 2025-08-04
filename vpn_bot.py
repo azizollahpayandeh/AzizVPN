@@ -525,10 +525,7 @@ def show_user_account(message):
             order_time = order.get('order_time', 'نامشخص')
             
             duration_text = {
-                '1month': '1 ماهه',
-                '3month': '3 ماهه',
-                '6month': '6 ماهه',
-                '1year': '1 ساله'
+                '1month': '1 ماهه'
             }.get(duration, duration)
             
             account_info += f"• {i}. {data_plan_text} - {duration_text} - {price:,} تومان\n"
@@ -592,7 +589,7 @@ def show_user_configs(message):
         if duration == '1month':
             duration_fa = '1 ماهه'
         else:
-            duration_fa = duration
+            duration_fa = '1 ماهه'  # همه مدت‌ها به 1 ماهه تبدیل می‌شوند
         
         configs_info += f"📦 سفارش {i}:\n"
         configs_info += f"👤 نام کاربری: `{username}`\n"
@@ -1109,42 +1106,32 @@ def show_data_plans(message):
     
     update_user_session(user_id, 'selecting_data_plan')
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
     
-    # دکمه‌های حجم داده با طراحی بهتر
-    btn_1gb = types.KeyboardButton('📊 1 گیگابایت')
-    btn_2gb = types.KeyboardButton('📊 2 گیگابایت')
-    btn_5gb = types.KeyboardButton('📊 5 گیگابایت')
-    btn_10gb = types.KeyboardButton('📊 10 گیگابایت')
-    btn_20gb = types.KeyboardButton('📊 20 گیگابایت')
-    btn_50gb = types.KeyboardButton('📊 50 گیگابایت')
+    # فقط گزینه حجم دلخواه
     btn_custom = types.KeyboardButton('📝 حجم دلخواه')
     
     back_btn = types.KeyboardButton('🔙 بازگشت')
     home_btn = types.KeyboardButton('🏠 منوی اصلی')
     
-    markup.add(btn_1gb, btn_2gb, btn_5gb, btn_10gb, btn_20gb, btn_50gb, btn_custom, back_btn, home_btn)
+    markup.add(btn_custom, back_btn, home_btn)
     
     plans_text = """
 📊 انتخاب حجم داده
 
-لطفا حجم مورد نظر خود را انتخاب کنید:
+لطفا حجم مورد نظر خود را وارد کنید:
 
-🔹 1 گیگابایت - مناسب برای وب‌گردی
-🔹 2 گیگابایت - مناسب برای شبکه‌های اجتماعی
-🔹 5 گیگابایت - مناسب برای تماشای ویدیو
-🔹 10 گیگابایت - مناسب برای دانلود
-🔹 20 گیگابایت - مناسب برای استفاده سنگین
-🔹 50 گیگابایت - مناسب برای استفاده حرفه‌ای
-🔹 حجم دلخواه - هر حجمی که می‌خواهید
+💡 قیمت هر گیگابایت: 3,000 تومان
+💡 حداقل حجم: 1 گیگابایت
+💡 حداکثر حجم: 100 گیگابایت
 
-💡 نکته: حجم انتخاب شده برای مدت زمان مشخصی معتبر خواهد بود.
+📝 روی "حجم دلخواه" کلیک کنید و حجم مورد نظر خود را وارد کنید.
     """
     
     bot.send_message(message.chat.id, plans_text, reply_markup=markup)
 
 # پردازش انتخاب حجم داده
-@bot.message_handler(func=lambda message: message.text in ['📊 1 گیگابایت', '📊 2 گیگابایت', '📊 5 گیگابایت', '📊 10 گیگابایت', '📊 20 گیگابایت', '📊 50 گیگابایت', '📝 حجم دلخواه'])
+@bot.message_handler(func=lambda message: message.text == '📝 حجم دلخواه')
 def process_data_plan(message):
     user_id = message.from_user.id
     
@@ -1158,49 +1145,25 @@ def process_data_plan(message):
     if user_id not in user_data:
         user_data[user_id] = {}
     
-    if message.text == '📝 حجم دلخواه':
-        # درخواست حجم دلخواه از کاربر
-        update_user_session(user_id, 'entering_custom_volume')
-        markup = create_back_button()
-        
-        custom_volume_text = """
+    # درخواست حجم دلخواه از کاربر
+    update_user_session(user_id, 'entering_custom_volume')
+    markup = create_back_button()
+    
+    custom_volume_text = """
 📝 حجم دلخواه
 
 لطفا حجم مورد نظر خود را به گیگابایت وارد کنید:
 
-💡 مثال: 15 (برای 15 گیگابایت)
+💡 مثال: 17 (برای 17 گیگابایت)
 💡 قیمت هر گیگابایت: 3,000 تومان
 💡 حداقل حجم: 1 گیگابایت
 💡 حداکثر حجم: 100 گیگابایت
 
 📝 فقط عدد وارد کنید (بدون واحد):
-        """
-        
-        bot.send_message(message.chat.id, custom_volume_text, reply_markup=markup)
-        bot.register_next_step_handler(message, process_custom_volume)
-        return
+    """
     
-    # تبدیل متن به حجم داده
-    data_plan_map = {
-        '📊 1 گیگابایت': '1GB',
-        '📊 2 گیگابایت': '2GB',
-        '📊 5 گیگابایت': '5GB',
-        '📊 10 گیگابایت': '10GB',
-        '📊 20 گیگابایت': '20GB',
-        '📊 50 گیگابایت': '50GB'
-    }
-    
-    selected_plan = data_plan_map.get(message.text)
-    if not selected_plan:
-        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
-        return
-    
-    # ذخیره حجم انتخاب شده
-    user_data[user_id]['data_plan'] = selected_plan
-    update_user_session(user_id, 'data_selected', {'data_plan': selected_plan})
-    
-    # نمایش زمان‌های اشتراک
-    show_duration_plans(message)
+    bot.send_message(message.chat.id, custom_volume_text, reply_markup=markup)
+    bot.register_next_step_handler(message, process_custom_volume)
 
 # پردازش حجم دلخواه
 def process_custom_volume(message):
@@ -1213,38 +1176,70 @@ def process_custom_volume(message):
         start(message)
         return
     
-    # بررسی دکمه‌های بازگشت
-    if message.text in ['🔙 بازگشت', '🏠 منوی اصلی']:
-        if message.text == '🔙 بازگشت':
-            show_data_plans(message)
-        else:
-            start(message)
+    if message.text == '🔙 بازگشت':
+        show_data_plans(message)
         return
     
     try:
-        volume = float(message.text.strip())
+        # تبدیل متن به عدد
+        volume = float(message.text)
         
-        # اعتبارسنجی حجم
-        if volume < 1 or volume > 100:
+        # بررسی محدودیت‌ها
+        if volume < 1:
             bot.send_message(message.chat.id, 
-                           "❌ حجم باید بین 1 تا 100 گیگابایت باشد.\n"
+                           "❌ حداقل حجم 1 گیگابایت است.\n"
+                           "لطفا دوباره وارد کنید:")
+            bot.register_next_step_handler(message, process_custom_volume)
+            return
+        
+        if volume > 100:
+            bot.send_message(message.chat.id, 
+                           "❌ حداکثر حجم 100 گیگابایت است.\n"
                            "لطفا دوباره وارد کنید:")
             bot.register_next_step_handler(message, process_custom_volume)
             return
         
         # ذخیره حجم دلخواه
-        user_data[user_id]['data_plan'] = f'{int(volume)}GB'
         user_data[user_id]['custom_volume'] = int(volume)
-        update_user_session(user_id, 'custom_volume_entered', {'custom_volume': int(volume)})
+        user_data[user_id]['data_plan'] = f"{int(volume)}GB"
+        update_user_session(user_id, 'data_selected', {'data_plan': f"{int(volume)}GB", 'custom_volume': int(volume)})
         
-        # نمایش زمان‌های اشتراک
-        show_duration_plans(message)
+        # نمایش تأیید و ادامه به مرحله بعدی
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        continue_btn = types.KeyboardButton('⏭️ ادامه')
+        back_btn = types.KeyboardButton('🔙 بازگشت')
+        markup.add(continue_btn, back_btn)
+        
+        confirmation_text = f"""
+✅ حجم انتخاب شده: {int(volume)} گیگابایت
+
+💰 قیمت پایه: {int(volume) * 3000:,} تومان
+💡 قیمت هر گیگابایت: 3,000 تومان
+
+⏭️ برای ادامه و انتخاب مدت زمان، روی "ادامه" کلیک کنید:
+        """
+        
+        bot.send_message(message.chat.id, confirmation_text, reply_markup=markup)
+        bot.register_next_step_handler(message, handle_volume_confirmation)
         
     except ValueError:
         bot.send_message(message.chat.id, 
                         "❌ لطفا یک عدد معتبر وارد کنید.\n"
-                        "مثال: 15 (برای 15 گیگابایت)")
+                        "مثال: 17")
         bot.register_next_step_handler(message, process_custom_volume)
+
+def handle_volume_confirmation(message):
+    """پردازش تأیید حجم و ادامه به مرحله بعدی"""
+    user_id = message.from_user.id
+    
+    if message.text == '⏭️ ادامه':
+        # نمایش مدت زمان‌های اشتراک
+        show_duration_plans(message)
+    elif message.text == '🔙 بازگشت':
+        show_data_plans(message)
+    else:
+        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
+        bot.register_next_step_handler(message, handle_volume_confirmation)
 
 # نمایش پلن‌های زمانی
 def show_duration_plans(message):
@@ -1259,36 +1254,30 @@ def show_duration_plans(message):
     
     update_user_session(user_id, 'selecting_duration')
     
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
     
-    # دکمه‌های مدت زمان با طراحی بهتر
+    # فقط گزینه 1 ماهه
     btn_1month = types.KeyboardButton('⏱ 1 ماهه')
-    btn_3month = types.KeyboardButton('⏱ 3 ماهه')
-    btn_6month = types.KeyboardButton('⏱ 6 ماهه')
-    btn_1year = types.KeyboardButton('⏱ 1 ساله')
     
     back_btn = types.KeyboardButton('🔙 بازگشت')
     home_btn = types.KeyboardButton('🏠 منوی اصلی')
     
-    markup.add(btn_1month, btn_3month, btn_6month, btn_1year, back_btn, home_btn)
+    markup.add(btn_1month, back_btn, home_btn)
     
     duration_text = """
 ⏱ انتخاب مدت زمان اشتراک
 
 لطفا مدت زمان مورد نظر خود را انتخاب کنید:
 
-🔹 1 ماهه - مناسب برای تست
-🔹 3 ماهه - مناسب برای استفاده کوتاه مدت
-🔹 6 ماهه - مناسب برای استفاده متوسط
-🔹 1 ساله - مناسب برای استفاده طولانی مدت
+🔹 1 ماهه - مناسب برای استفاده کوتاه مدت
 
-💡 نکته: مدت زمان طولانی‌تر، قیمت بهتری دارد.
+💡 نکته: مدت زمان اشتراک 1 ماهه است.
     """
     
     bot.send_message(message.chat.id, duration_text, reply_markup=markup)
 
 # پردازش انتخاب مدت زمان
-@bot.message_handler(func=lambda message: message.text in ['⏱ 1 ماهه', '⏱ 3 ماهه', '⏱ 6 ماهه', '⏱ 1 ساله'])
+@bot.message_handler(func=lambda message: message.text == '⏱ 1 ماهه')
 def process_duration_plan(message):
     user_id = message.from_user.id
     
@@ -1298,22 +1287,9 @@ def process_duration_plan(message):
         start(message)
         return
     
-    # تبدیل متن به مدت زمان
-    duration_map = {
-        '⏱ 1 ماهه': '1month',
-        '⏱ 3 ماهه': '3month',
-        '⏱ 6 ماهه': '6month',
-        '⏱ 1 ساله': '1year'
-    }
-    
-    selected_duration = duration_map.get(message.text)
-    if not selected_duration:
-        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
-        return
-    
-    # ذخیره مدت زمان انتخاب شده
-    user_data[user_id]['duration'] = selected_duration
-    update_user_session(user_id, 'duration_selected', {'duration': selected_duration})
+    # ذخیره مدت زمان انتخاب شده (فقط 1 ماهه)
+    user_data[user_id]['duration'] = '1month'
+    update_user_session(user_id, 'duration_selected', {'duration': '1month'})
     
     # درخواست نام کاربری
     ask_username(message)
@@ -1446,19 +1422,9 @@ def show_final_price(message):
     # قیمت هر گیگابایت: 3000 تومان
     price_per_gb = 3000
     
-    # محاسبه قیمت پایه بر اساس حجم
+    # محاسبه قیمت پایه بر اساس حجم (بدون ضریب مدت زمان)
     base_price = data_gb * price_per_gb
-    
-    # ضریب مدت زمان
-    duration_multipliers = {
-        '1month': 1.0,
-        '3month': 2.5,  # تخفیف 17%
-        '6month': 4.5,  # تخفیف 25%
-        '1year': 8.0    # تخفیف 33%
-    }
-    
-    multiplier = duration_multipliers.get(duration, 1.0)
-    total_price = int(base_price * multiplier)
+    total_price = base_price
     
     # اعمال تخفیف عمومی
     general_discount_amount = int(total_price * discount_percentage / 100)
@@ -1484,12 +1450,7 @@ def show_final_price(message):
     
     # تبدیل به متن فارسی
     data_plan_text = f"{data_gb} گیگابایت"
-    duration_text = {
-        '1month': '1 ماهه',
-        '3month': '3 ماهه',
-        '6month': '6 ماهه',
-        '1year': '1 ساله'
-    }.get(duration, duration)
+    duration_text = "1 ماهه"
     
     # نمایش اطلاعات سفارش
     order_summary = f"""
@@ -1693,12 +1654,8 @@ def process_receipt(message):
         duration = user_data[user_id]['duration']
         if duration == '1month':
             duration_text = '1 ماهه'
-        elif duration == '3month':
-            duration_text = '3 ماهه'
-        elif duration == '6month':
-            duration_text = '6 ماهه'
-        elif duration == '1year':
-            duration_text = '1 ساله'
+        else:
+            duration_text = '1 ماهه'  # همه مدت‌ها به 1 ماهه تبدیل می‌شوند
         
         username = user_data[user_id]['username']
         price = user_data[user_id]['price']
@@ -2411,7 +2368,7 @@ def show_download_options(message):
         if duration == '1month':
             duration_fa = '1 ماهه'
         else:
-            duration_fa = duration
+            duration_fa = '1 ماهه'  # همه مدت‌ها به 1 ماهه تبدیل می‌شوند
         
         btn_text = f"📥 {username} - {data_plan_fa} - {duration_fa}"
         markup.add(types.KeyboardButton(btn_text))
@@ -2468,7 +2425,7 @@ def process_config_download(message):
         if duration == '1month':
             duration_fa = '1 ماهه'
         else:
-            duration_fa = duration
+            duration_fa = '1 ماهه'  # همه مدت‌ها به 1 ماهه تبدیل می‌شوند
         
         btn_text = f"📥 {username} - {data_plan_fa} - {duration_fa}"
         
@@ -3151,7 +3108,7 @@ if __name__ == "__main__":
         print(f"⚠️ خطا در حذف webhook: {e}")
     
     print("🤖 ربات در حال شروع است...")
-    print(f"🔐 آیدی ادمین: {ADMIN_ID}")
+    print(f"�� آیدی ادمین: {ADMIN_ID}")
     print(f"💳 شماره کارت: {CARD_NUMBER}")
     
     # تابع auto-save
