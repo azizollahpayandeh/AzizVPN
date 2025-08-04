@@ -22,7 +22,8 @@ DATA_FILES = {
     'blocked': 'blocked_users.json',
     'configs': 'configs_data.json',
     'discount': 'discount_data.json',
-    'orders': 'orders_data.json'
+    'orders': 'orders_data.json',
+    'representation': 'representation_requests.json'
 }
 
 # ایجاد نمونه ربات
@@ -74,13 +75,17 @@ def save_data():
         with open(DATA_FILES['orders'], 'w', encoding='utf-8') as f:
             json.dump(orders_db, f, ensure_ascii=False, indent=2)
         
+        # ذخیره درخواست‌های نمایندگی
+        with open(DATA_FILES['representation'], 'w', encoding='utf-8') as f:
+            json.dump(representation_requests, f, ensure_ascii=False, indent=2)
+        
         print("✅ تمام داده‌ها با موفقیت ذخیره شدند.")
     except Exception as e:
         print(f"❌ خطا در ذخیره داده‌ها: {e}")
 
 def load_data():
     """بارگذاری تمام داده‌ها از فایل‌های JSON"""
-    global users_db, blocked_users, configs_db, discount_percentage, orders_db
+    global users_db, blocked_users, configs_db, discount_percentage, orders_db, representation_requests
     
     try:
         # بارگذاری اطلاعات کاربران
@@ -114,6 +119,13 @@ def load_data():
                 # تبدیل کلیدهای string به int
                 orders_db = {int(k): v for k, v in orders_db.items()}
         
+        # بارگذاری درخواست‌های نمایندگی
+        if os.path.exists(DATA_FILES['representation']):
+            with open(DATA_FILES['representation'], 'r', encoding='utf-8') as f:
+                representation_requests = json.load(f)
+        else:
+            representation_requests = {}
+        
         print("✅ تمام داده‌ها با موفقیت بارگذاری شدند.")
         print(f"📊 آمار بارگذاری شده:")
         print(f"   👥 کاربران: {len(users_db)}")
@@ -121,6 +133,7 @@ def load_data():
         print(f"   🔐 کانفیگ‌ها: {len(configs_db)}")
         print(f"   💰 تخفیف: {discount_percentage}%")
         print(f"   📦 سفارشات: {len(orders_db)}")
+        print(f"   🏢 درخواست‌های نمایندگی: {len(representation_requests)}")
         
     except Exception as e:
         print(f"❌ خطا در بارگذاری داده‌ها: {e}")
@@ -370,6 +383,9 @@ def send_representation_request_to_admin(message):
         },
         'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
+    
+    # ذخیره داده‌ها
+    save_data()
     
     # پیام به ادمین
     admin_msg = f"""
@@ -2763,7 +2779,17 @@ def handle_representation_approval(call):
         bot.answer_callback_query(call.id, "⛔️ شما دسترسی به این عملیات را ندارید.")
         return
     
-    action, request_id = call.data.split('_', 2)[1:]
+    # پارس کردن callback_data به درستی
+    parts = call.data.split('_')
+    if len(parts) < 3:
+        bot.answer_callback_query(call.id, "❌ داده callback نامعتبر است.")
+        return
+    
+    action = parts[1]  # approve یا reject
+    request_id = '_'.join(parts[2:])  # بقیه قسمت‌ها به عنوان request_id
+    
+    print(f"Debug: action={action}, request_id={request_id}")
+    print(f"Debug: representation_requests keys: {list(representation_requests.keys())}")
     
     if request_id not in representation_requests:
         bot.answer_callback_query(call.id, "❌ درخواست نمایندگی یافت نشد.")
