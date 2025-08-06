@@ -364,9 +364,32 @@ def process_representation_request(message):
         clear_user_session(user_id)
         return
 
+# تابع بررسی وضعیت ادمین
+def check_admin_availability():
+    """بررسی دسترسی ادمین"""
+    try:
+        # تلاش برای ارسال پیام تست به ادمین
+        test_msg = bot.send_message(ADMIN_ID, "🔍 تست دسترسی ادمین...")
+        if test_msg:
+            bot.delete_message(ADMIN_ID, test_msg.message_id)
+            return True
+    except Exception as e:
+        print(f"❌ Admin not available: {e}")
+        return False
+    return False
+
 # ارسال درخواست نمایندگی به ادمین
 def send_representation_request_to_admin(message):
     user_id = message.from_user.id
+    
+    # بررسی دسترسی ادمین قبل از ارسال درخواست
+    if not check_admin_availability():
+        markup = create_main_menu()
+        bot.send_message(message.chat.id, 
+                        "❌ ادمین در دسترس نیست.\n"
+                        "🔧 لطفا بعداً دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
+                        reply_markup=markup)
+        return
     
     try:
         # اطلاعات کاربر
@@ -397,22 +420,20 @@ def send_representation_request_to_admin(message):
         # ذخیره داده‌ها
         save_data()
         
-        # پیام به ادمین
-        admin_msg = f"""
-🏢 درخواست نمایندگی جدید:
+        # پیام به ادمین (بدون Markdown برای جلوگیری از خطای parsing)
+        admin_msg = f"""🏢 درخواست نمایندگی جدید:
 
 👤 اطلاعات کاربر:
 • نام: {user_name}
 • یوزرنیم: @{username}
-• آیدی: `{user_id}`
+• آیدی: {user_id}
 • تاریخ عضویت: {join_date}
 • تعداد سفارشات: {total_orders}
 • کل هزینه: {total_spent:,} تومان
 
 📅 تاریخ درخواست: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-آیا می‌خواهید این کاربر را نماینده کنید؟
-        """
+آیا می‌خواهید این کاربر را نماینده کنید؟"""
         
         # ایجاد دکمه‌های تأیید/رد
         markup = types.InlineKeyboardMarkup(row_width=2)
@@ -420,8 +441,8 @@ def send_representation_request_to_admin(message):
         reject_btn = types.InlineKeyboardButton("❌ رد درخواست", callback_data=f"rej_rep_{request_id}")
         markup.add(approve_btn, reject_btn)
         
-        # ارسال پیام به ادمین
-        sent = bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown", reply_markup=markup)
+        # ارسال پیام به ادمین (بدون parse_mode)
+        sent = bot.send_message(ADMIN_ID, admin_msg, reply_markup=markup)
         
         if sent:
             # تأیید به کاربر
@@ -457,7 +478,8 @@ def send_representation_request_to_admin(message):
         markup = create_main_menu()
         bot.send_message(message.chat.id, 
                         "❌ خطا در ارسال درخواست نمایندگی.\n"
-                        "لطفا با پشتیبانی تماس بگیرید.",
+                        "🔧 ادمین در دسترس نیست یا مشکلی در تنظیمات وجود دارد.\n"
+                        "📞 لطفا با پشتیبانی تماس بگیرید.",
                         reply_markup=markup)
 
 # پاسخ به دکمه‌های پنل مدیریت
@@ -2649,51 +2671,47 @@ def handle_representation_approval(call):
         
         if action == 'approve':
             # درخواست درصد تخفیف از ادمین
-            discount_instruction = f"""
-🏢 تأیید نمایندگی
+            discount_instruction = f"""🏢 تأیید نمایندگی
 
 👤 کاربر: {user_info['first_name']} (@{user_info['username']})
-🆔 آیدی: `{user_id}`
+🆔 آیدی: {user_id}
 📅 تاریخ عضویت: {user_info['join_date']}
 📦 تعداد سفارشات: {user_info['total_orders']}
 💰 کل هزینه: {user_info['total_spent']:,} تومان
 
-📝 لطفا درصد تخفیف نمایندگی را وارد کنید (مثال: 10, 20, 50):
-            """
+📝 لطفا درصد تخفیف نمایندگی را وارد کنید (مثال: 10, 20, 50):"""
             
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
             cancel_btn = types.KeyboardButton('❌ انصراف')
             markup.add(cancel_btn)
             
             # ارسال پیام جدید برای دریافت درصد تخفیف
-            bot.send_message(call.message.chat.id, discount_instruction, parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(call.message.chat.id, discount_instruction, reply_markup=markup)
             
             # ثبت مرحله بعدی برای دریافت درصد تخفیف
             bot.register_next_step_handler(call.message, lambda msg: process_representation_discount(msg, user_id, request_id))
             
-            # به‌روزرسانی پیام اصلی
+            # به‌روزرسانی پیام اصلی (بدون Markdown)
             bot.edit_message_text(
                 f"✅ درخواست نمایندگی تأیید شد!\n\n"
                 f"👤 کاربر: {user_info['first_name']} (@{user_info['username']})\n"
-                f"🆔 آیدی: `{user_id}`\n\n"
+                f"🆔 آیدی: {user_id}\n\n"
                 f"📝 لطفا درصد تخفیف را وارد کنید:",
                 call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown"
+                call.message.message_id
             )
             
             print(f"✅ Approval process started for user {user_id}")
             
         elif action == 'reject':
-            # رد درخواست نمایندگی
+            # رد درخواست نمایندگی (بدون Markdown)
             bot.edit_message_text(
                 f"❌ درخواست نمایندگی رد شد!\n\n"
                 f"👤 کاربر: {user_info['first_name']} (@{user_info['username']})\n"
-                f"🆔 آیدی: `{user_id}`\n\n"
+                f"🆔 آیدی: {user_id}\n\n"
                 f"📅 تاریخ رد: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                 call.message.chat.id,
-                call.message.message_id,
-                parse_mode="Markdown"
+                call.message.message_id
             )
             
             # ارسال پیام رد به کاربر
@@ -2952,6 +2970,22 @@ def clear_test_representation_requests(message):
         bot.send_message(message.chat.id, f"❌ خطا در پاک کردن تست: {e}")
         print(f"❌ Error in clear_test_representation_requests: {e}")
 
+# تابع تست دسترسی ادمین
+@bot.message_handler(commands=['test_admin'])
+def test_admin_access(message):
+    """تست دسترسی ادمین"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    try:
+        if check_admin_availability():
+            bot.send_message(message.chat.id, "✅ ادمین در دسترس است!")
+        else:
+            bot.send_message(message.chat.id, "❌ ادمین در دسترس نیست!")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطا در تست ادمین: {e}")
+        print(f"❌ Error in test_admin_access: {e}")
+
 # تابع برای پاکسازی جلسات منقضی شده
 def cleanup_expired_sessions():
     """پاکسازی جلسات منقضی شده"""
@@ -3109,10 +3143,9 @@ def process_representation_discount(message, user_id, request_id):
         markup.add(back_btn)
         
         bot.send_message(message.chat.id, 
-                        f"✅ نمایندگی کاربر `{user_id}` با موفقیت تأیید شد!\n\n"
+                        f"✅ نمایندگی کاربر {user_id} با موفقیت تأیید شد!\n\n"
                         f"🎯 درصد تخفیف: {discount_percent}%\n"
                         f"📅 تاریخ تأیید: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                        parse_mode="Markdown",
                         reply_markup=markup)
         
         # حذف درخواست از لیست
@@ -3215,6 +3248,9 @@ if __name__ == "__main__":
     import time
     import threading
     
+    # بارگذاری داده‌ها
+    load_data()
+    
     # حذف webhook قبل از شروع polling
     try:
         bot.remove_webhook()
@@ -3224,7 +3260,7 @@ if __name__ == "__main__":
         print(f"⚠️ خطا در حذف webhook: {e}")
     
     print("🤖 ربات در حال شروع است...")
-    print(f"�� آیدی ادمین: {ADMIN_ID}")
+    print(f"👤 آیدی ادمین: {ADMIN_ID}")
     print(f"💳 شماره کارت: {CARD_NUMBER}")
     
     # تابع auto-save
@@ -3242,12 +3278,29 @@ if __name__ == "__main__":
     auto_save_thread.start()
     print("💾 سیستم auto-save فعال شد.")
     
-    # شروع polling
-    try:
-        print("🔄 شروع polling...")
-        bot.polling(none_stop=True, interval=1, timeout=60)
-    except Exception as e:
-        print(f"❌ خطا در polling: {e}")
-        print("🔄 تلاش مجدد در 5 ثانیه...")
-        time.sleep(5)
-        bot.polling(none_stop=True, interval=1, timeout=60) 
+    # شروع polling با retry mechanism
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries:
+        try:
+            print("🔄 شروع polling...")
+            bot.polling(none_stop=True, interval=1, timeout=60)
+        except Exception as e:
+            retry_count += 1
+            print(f"❌ خطا در polling (تلاش {retry_count}/{max_retries}): {e}")
+            
+            if retry_count < max_retries:
+                print("🔄 تلاش مجدد در 10 ثانیه...")
+                time.sleep(10)
+                
+                # حذف webhook قبل از تلاش مجدد
+                try:
+                    bot.remove_webhook()
+                    print("✅ Webhook حذف شد.")
+                    time.sleep(2)
+                except:
+                    pass
+            else:
+                print("❌ حداکثر تعداد تلاش‌ها انجام شد. ربات متوقف می‌شود.")
+                break
