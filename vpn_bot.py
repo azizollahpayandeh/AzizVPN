@@ -141,6 +141,23 @@ def load_data():
 # بارگذاری داده‌ها در شروع ربات
 load_data()
 
+# تنظیم پلن‌های ثابت و ساختار موجودی کانفیگ پلنی
+FIXED_PLAN_LABELS = [f"{gb}GB" for gb in range(30, 151, 10)]
+
+def ensure_plan_pools():
+    global configs_db
+    try:
+        if not isinstance(configs_db, dict):
+            configs_db = {}
+        if 'plans' not in configs_db or not isinstance(configs_db['plans'], dict):
+            configs_db['plans'] = {}
+        for plan_key in FIXED_PLAN_LABELS:
+            configs_db['plans'].setdefault(plan_key, [])
+    finally:
+        save_data()
+
+ensure_plan_pools()
+
 # تعریف قیمت‌ها (به تومان)
 prices = {
     "30GB": {
@@ -801,19 +818,171 @@ def list_users(message):
 def manage_configs(message):
     if message.from_user.id != ADMIN_ID:
         return
-    
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn1 = types.KeyboardButton('📁 آپلود کانفیگ')
-    btn2 = types.KeyboardButton('📋 لیست کانفیگ‌ها')
-    btn3 = types.KeyboardButton('🗑️ حذف کانفیگ')
+    btn1 = types.KeyboardButton('➕ افزودن کانفیگ به پلن')
+    btn2 = types.KeyboardButton('📋 لیست موجودی پلن‌ها')
+    btn3 = types.KeyboardButton('🗑️ حذف کانفیگ از پلن')
     back = types.KeyboardButton('🔙 بازگشت به پنل')
     markup.add(btn1, btn2, btn3, back)
-    
-    bot.send_message(message.chat.id, 
-                     "🔐 مدیریت کانفیگ‌ها:\n\n"
-                     f"📁 تعداد کانفیگ‌ها: {len(configs_db)}\n"
-                     "برای آپلود کانفیگ جدید، فایل را ارسال کنید.",
+
+    total_count = sum(len(v) for v in configs_db.get('plans', {}).values())
+    bot.send_message(message.chat.id,
+                     f"🔐 مدیریت کانفیگ‌ها (پلنی):\n\n"
+                     f"📦 کل موجودی: {total_count}\n"
+                     f"برای افزودن، یکی از پلن‌ها را انتخاب کنید و کانفیگ را به صورت متن یا فایل ارسال کنید.",
                      reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text in ['➕ افزودن کانفیگ به پلن', '📋 لیست موجودی پلن‌ها', '🗑️ حذف کانفیگ از پلن'])
+def manage_configs_actions(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    if message.text == '➕ افزودن کانفیگ به پلن':
+        # انتخاب پلن
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
+        for i in range(0, len(FIXED_PLAN_LABELS), 3):
+            labels_fa = [types.KeyboardButton(label.replace('GB', ' گیگ')) for label in FIXED_PLAN_LABELS[i:i+3]]
+            markup.row(*labels_fa)
+        back = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back)
+        bot.send_message(message.chat.id, 'یک پلن را برای افزودن کانفیگ انتخاب کنید:', reply_markup=markup)
+        bot.register_next_step_handler(message, _pick_plan_for_add)
+
+    elif message.text == '📋 لیست موجودی پلن‌ها':
+        inventories = []
+        for label in FIXED_PLAN_LABELS:
+            inventories.append(f"{label.replace('GB',' گیگ')}: {len(configs_db.get('plans', {}).get(label, []))}")
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+        back = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back)
+        bot.send_message(message.chat.id, '📋 موجودی کانفیگ‌ پلن‌ها:\n\n' + '\n'.join(inventories), reply_markup=markup)
+
+    elif message.text == '🗑️ حذف کانفیگ از پلن':
+        # انتخاب پلن
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
+        for i in range(0, len(FIXED_PLAN_LABELS), 3):
+            labels_fa = [types.KeyboardButton(label.replace('GB', ' گیگ')) for label in FIXED_PLAN_LABELS[i:i+3]]
+            markup.row(*labels_fa)
+        back = types.KeyboardButton('🔙 بازگشت به پنل')
+        markup.add(back)
+        bot.send_message(message.chat.id, 'یک پلن را برای حذف کانفیگ انتخاب کنید:', reply_markup=markup)
+        bot.register_next_step_handler(message, _pick_plan_for_delete)
+
+
+def _fa_to_plan_key(text):
+    try:
+        gb = int(text.replace('گیگ', '').strip())
+        key = f"{gb}GB"
+        return key if key in FIXED_PLAN_LABELS else None
+    except Exception:
+        return None
+
+# افزودن کانفیگ به پلن انتخاب شده
+
+def _pick_plan_for_add(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text == '🔙 بازگشت به پنل':
+        show_admin_panel(message)
+        return
+    plan_key = _fa_to_plan_key(message.text)
+    if not plan_key:
+        bot.send_message(message.chat.id, '❌ گزینه نامعتبر. دوباره انتخاب کنید.')
+        bot.register_next_step_handler(message, _pick_plan_for_add)
+        return
+    update_user_session(message.from_user.id, 'adding_config_plan', {'plan_key': plan_key})
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    back = types.KeyboardButton('🔙 بازگشت به پنل')
+    markup.add(back)
+    bot.send_message(message.chat.id, f"پلن {plan_key.replace('GB',' گیگ')} انتخاب شد. اکنون کانفیگ را به صورت فایل یا متن ارسال کنید.", reply_markup=markup)
+    bot.register_next_step_handler(message, _receive_config_for_plan)
+
+
+def _receive_config_for_plan(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text == '🔙 بازگشت به پنل':
+        show_admin_panel(message)
+        return
+    session = get_user_session(message.from_user.id) or {}
+    plan_key = (session.get('data') or {}).get('plan_key')
+    if not plan_key:
+        manage_configs(message)
+        return
+
+    entry = {'type': None, 'value': None, 'upload_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    if message.content_type == 'document':
+        entry['type'] = 'document'
+        entry['value'] = message.document.file_id
+        entry['file_name'] = message.document.file_name
+    elif message.content_type == 'text':
+        entry['type'] = 'text'
+        entry['value'] = message.text
+    else:
+        bot.send_message(message.chat.id, '❌ لطفا فایل یا متن کانفیگ ارسال کنید.')
+        bot.register_next_step_handler(message, _receive_config_for_plan)
+        return
+
+    configs_db['plans'].setdefault(plan_key, []).append(entry)
+    save_data()
+    bot.send_message(message.chat.id, f"✅ کانفیگ برای پلن {plan_key.replace('GB',' گیگ')} ذخیره شد. می‌توانید مجدد ارسال کنید یا بازگشت کنید.")
+    bot.register_next_step_handler(message, _receive_config_for_plan)
+
+
+# حذف کانفیگ از پلن انتخاب شده
+
+def _pick_plan_for_delete(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text == '🔙 بازگشت به پنل':
+        show_admin_panel(message)
+        return
+    plan_key = _fa_to_plan_key(message.text)
+    if not plan_key:
+        bot.send_message(message.chat.id, '❌ گزینه نامعتبر. دوباره انتخاب کنید.')
+        bot.register_next_step_handler(message, _pick_plan_for_delete)
+        return
+    update_user_session(message.from_user.id, 'deleting_config_plan', {'plan_key': plan_key})
+
+    items = configs_db.get('plans', {}).get(plan_key, [])
+    if not items:
+        bot.send_message(message.chat.id, '📭 این پلن موجودی ندارد.')
+        manage_configs(message)
+        return
+
+    listing = [f"{idx+1}. {('فایل' if it.get('type')=='document' else 'متن')} - {it.get('file_name','')}" for idx, it in enumerate(items)]
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    back = types.KeyboardButton('🔙 بازگشت به پنل')
+    markup.add(back)
+    bot.send_message(message.chat.id, '🗑 یکی را برای حذف انتخاب کنید (شماره را ارسال کنید):\n\n' + '\n'.join(listing), reply_markup=markup)
+    bot.register_next_step_handler(message, _delete_config_from_plan)
+
+
+def _delete_config_from_plan(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    if message.text == '🔙 بازگشت به پنل':
+        show_admin_panel(message)
+        return
+    session = get_user_session(message.from_user.id) or {}
+    plan_key = (session.get('data') or {}).get('plan_key')
+    if not plan_key:
+        manage_configs(message)
+        return
+    try:
+        idx = int(message.text) - 1
+    except Exception:
+        bot.send_message(message.chat.id, '❌ شماره نامعتبر است.')
+        bot.register_next_step_handler(message, _delete_config_from_plan)
+        return
+    items = configs_db.get('plans', {}).get(plan_key, [])
+    if 0 <= idx < len(items):
+        removed = items.pop(idx)
+        save_data()
+        bot.send_message(message.chat.id, '✅ مورد حذف شد.')
+    else:
+        bot.send_message(message.chat.id, '❌ شماره خارج از محدوده است.')
+    manage_configs(message)
 
 # آپلود کانفیگ
 @bot.message_handler(content_types=['document'], func=lambda message: message.from_user.id == ADMIN_ID)
@@ -1135,203 +1304,62 @@ def test_admin_message(message):
 
 # نمایش پلن‌های حجمی
 def show_data_plans(message):
-    """نمایش پلن‌های حجم داده با طراحی بهتر"""
+    """نمایش پلن‌های حجم داده ثابت"""
     user_id = message.from_user.id
-    
-    # بررسی اعتبار جلسه
     if not is_session_valid(user_id):
         bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
         start(message)
         return
-    
+
     update_user_session(user_id, 'selecting_data_plan')
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    
-    # فقط گزینه حجم دلخواه
-    btn_custom = types.KeyboardButton('📝 حجم دلخواه')
-    
+
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
+    buttons = [types.KeyboardButton(label.replace('GB', ' گیگ')) for label in FIXED_PLAN_LABELS]
+    # 30 تا 150 گیگ
+    for i in range(0, len(buttons), 3):
+        markup.row(*buttons[i:i+3])
+
     back_btn = types.KeyboardButton('🔙 بازگشت')
     home_btn = types.KeyboardButton('🏠 منوی اصلی')
-    
-    markup.add(btn_custom, back_btn, home_btn)
-    
+    markup.add(back_btn, home_btn)
+
     plans_text = """
-📊 انتخاب حجم داده
+📊 انتخاب پلن حجمی (همه 1 ماهه)
 
-لطفا حجم مورد نظر خود را وارد کنید:
-
-💡 قیمت هر گیگابایت: 3,000 تومان
-💡 حداقل حجم: 30 گیگابایت
-💡 حداکثر حجم: 150 گیگابایت
-
-📝 روی "حجم دلخواه" کلیک کنید و حجم مورد نظر خود را وارد کنید.
+یکی از حجم‌ها را انتخاب کنید:
+30، 40، 50، 60، 70، 80، 90، 100، 110، 120، 130، 140، 150 گیگ
     """
-    
     bot.send_message(message.chat.id, plans_text, reply_markup=markup)
 
-# پردازش انتخاب حجم داده
-@bot.message_handler(func=lambda message: message.text == '📝 حجم دلخواه')
-def process_data_plan(message):
+@bot.message_handler(func=lambda message: message.text and message.text.strip().endswith('گیگ'))
+def process_fixed_plan_selection(message):
     user_id = message.from_user.id
-    
-    # بررسی اعتبار جلسه
     if not is_session_valid(user_id):
         bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
         start(message)
         return
-    
-    # ایجاد حافظه موقت برای کاربر
+
+    label_fa = message.text.strip()
+    try:
+        gb_value = int(label_fa.replace('گیگ', '').strip())
+        plan_key = f"{gb_value}GB"
+        if plan_key not in FIXED_PLAN_LABELS:
+            raise ValueError()
+    except Exception:
+        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
+        show_data_plans(message)
+        return
+
     if user_id not in user_data:
         user_data[user_id] = {}
-    
-    # درخواست حجم دلخواه از کاربر
-    update_user_session(user_id, 'entering_custom_volume')
-    markup = create_back_button()
-    
-    custom_volume_text = """
-📝 حجم دلخواه
+    user_data[user_id]['data_plan'] = plan_key
+    user_data[user_id]['data_gb'] = gb_value
 
-لطفا حجم مورد نظر خود را به گیگابایت وارد کنید:
+    update_user_session(user_id, 'data_selected', {'data_plan': plan_key, 'data_gb': gb_value})
 
-💡 مثال: 50 (برای 50 گیگابایت)
-💡 قیمت هر گیگابایت: 3,000 تومان
-💡 حداقل حجم: 30 گیگابایت
-💡 حداکثر حجم: 150 گیگابایت
-
-📝 فقط عدد وارد کنید (بدون واحد):
-    """
-    
-    bot.send_message(message.chat.id, custom_volume_text, reply_markup=markup)
-    bot.register_next_step_handler(message, process_custom_volume)
-
-# پردازش حجم دلخواه
-def process_custom_volume(message):
-    """پردازش حجم دلخواه وارد شده توسط کاربر"""
-    user_id = message.from_user.id
-    
-    # بررسی اعتبار جلسه
-    if not is_session_valid(user_id):
-        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
-        start(message)
-        return
-    
-    if message.text == '🔙 بازگشت':
-        show_data_plans(message)
-        return
-    
-    try:
-        # تبدیل متن به عدد
-        volume = float(message.text)
-        
-        # بررسی محدودیت‌ها
-        if volume < 30:
-            bot.send_message(message.chat.id, 
-                           "❌ حداقل حجم 30 گیگابایت است.\n"
-                           "لطفا دوباره وارد کنید:")
-            bot.register_next_step_handler(message, process_custom_volume)
-            return
-        
-        if volume > 150:
-            bot.send_message(message.chat.id, 
-                           "❌ حداکثر حجم 150 گیگابایت است.\n"
-                           "لطفا دوباره وارد کنید:")
-            bot.register_next_step_handler(message, process_custom_volume)
-            return
-        
-        # ذخیره حجم دلخواه
-        user_data[user_id]['custom_volume'] = int(volume)
-        user_data[user_id]['data_plan'] = f"{int(volume)}GB"
-        update_user_session(user_id, 'data_selected', {'data_plan': f"{int(volume)}GB", 'custom_volume': int(volume)})
-        
-        # نمایش تأیید و ادامه به مرحله بعدی
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-        continue_btn = types.KeyboardButton('⏭️ ادامه')
-        back_btn = types.KeyboardButton('🔙 بازگشت')
-        markup.add(continue_btn, back_btn)
-        
-        confirmation_text = f"""
-✅ حجم انتخاب شده: {int(volume)} گیگابایت
-
-💰 قیمت پایه: {int(volume) * 3000:,} تومان
-💡 قیمت هر گیگابایت: 3,000 تومان
-
-⏭️ برای ادامه و انتخاب مدت زمان، روی "ادامه" کلیک کنید:
-        """
-        
-        bot.send_message(message.chat.id, confirmation_text, reply_markup=markup)
-        bot.register_next_step_handler(message, handle_volume_confirmation)
-        
-    except ValueError:
-        bot.send_message(message.chat.id, 
-                        "❌ لطفا یک عدد معتبر وارد کنید.\n"
-                        "مثال: 50")
-        bot.register_next_step_handler(message, process_custom_volume)
-
-def handle_volume_confirmation(message):
-    """پردازش تأیید حجم و ادامه به مرحله بعدی"""
-    user_id = message.from_user.id
-    
-    if message.text == '⏭️ ادامه':
-        # نمایش مدت زمان‌های اشتراک
-        show_duration_plans(message)
-    elif message.text == '🔙 بازگشت':
-        show_data_plans(message)
-    else:
-        bot.send_message(message.chat.id, "❌ لطفا یکی از گزینه‌های موجود را انتخاب کنید.")
-        bot.register_next_step_handler(message, handle_volume_confirmation)
-
-# نمایش پلن‌های زمانی
-def show_duration_plans(message):
-    """نمایش پلن‌های مدت زمان با طراحی بهتر"""
-    user_id = message.from_user.id
-    
-    # بررسی اعتبار جلسه
-    if not is_session_valid(user_id):
-        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
-        start(message)
-        return
-    
-    update_user_session(user_id, 'selecting_duration')
-    
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    
-    # فقط گزینه 1 ماهه
-    btn_1month = types.KeyboardButton('⏱ 1 ماهه')
-    
-    back_btn = types.KeyboardButton('🔙 بازگشت')
-    home_btn = types.KeyboardButton('🏠 منوی اصلی')
-    
-    markup.add(btn_1month, back_btn, home_btn)
-    
-    duration_text = """
-⏱ انتخاب مدت زمان اشتراک
-
-لطفا مدت زمان مورد نظر خود را انتخاب کنید:
-
-🔹 1 ماهه - مناسب برای استفاده کوتاه مدت
-
-💡 نکته: مدت زمان اشتراک 1 ماهه است.
-    """
-    
-    bot.send_message(message.chat.id, duration_text, reply_markup=markup)
-
-# پردازش انتخاب مدت زمان
-@bot.message_handler(func=lambda message: message.text == '⏱ 1 ماهه')
-def process_duration_plan(message):
-    user_id = message.from_user.id
-    
-    # بررسی اعتبار جلسه
-    if not is_session_valid(user_id):
-        bot.send_message(message.chat.id, "⏰ جلسه شما منقضی شده است. لطفا دوباره شروع کنید.")
-        start(message)
-        return
-    
-    # ذخیره مدت زمان انتخاب شده (فقط 1 ماهه)
+    # فقط 1 ماهه است، پس مستقیم به انتخاب نام کاربری برویم
     user_data[user_id]['duration'] = '1month'
     update_user_session(user_id, 'duration_selected', {'duration': '1month'})
-    
-    # درخواست نام کاربری
     ask_username(message)
 
 # درخواست نام کاربری
@@ -1452,12 +1480,7 @@ def show_final_price(message):
     username = user_data[user_id]['username']
     
     # استخراج حجم داده (به گیگابایت)
-    if 'custom_volume' in user_data[user_id]:
-        # حجم دلخواه
-        data_gb = user_data[user_id]['custom_volume']
-    else:
-        # حجم از پیش تعریف شده
-        data_gb = int(data_plan.replace('GB', ''))
+    data_gb = user_data[user_id].get('data_gb', int(data_plan.replace('GB', '')))
     
     # قیمت هر گیگابایت: 3000 تومان
     price_per_gb = 3000
@@ -3185,32 +3208,55 @@ def handle_order_approval(call):
     user_id = order_info['user_id']
     
     if action == 'approve':
-        # تأیید سفارش - درخواست فایل کانفیگ
-        bot.edit_message_text(
-            f"✅ سفارش تأیید شد!\n\n"
-            f"🆔 آیدی کاربر: `{user_id}`\n"
-            f"👤 نام کاربری: `{order_info['username']}`\n"
-            f"📊 حجم: {order_info['data_plan']}\n"
-            f"⏱ مدت: {order_info['duration']}\n"
-            f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
-            f"📁 لطفا فایل کانفیگ را ارسال کنید:",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode="Markdown"
-        )
-        
-        # ثبت مرحله بعدی برای دریافت فایل کانفیگ
-        bot.register_next_step_handler(call.message, lambda msg: process_config_file(msg, user_id, order_id))
-        
-        # ارسال پیام تأیید به کاربر
         try:
-            bot.send_message(user_id, 
-                           "✅ سفارش شما تأیید شد!\n\n"
-                           "فایل کانفیگ در حال آماده‌سازی است و به زودی برای شما ارسال خواهد شد.\n\n"
-                           "🙏 از صبر شما متشکریم.")
+            plan_gb = None
+            try:
+                plan_gb = int(str(order_info['data_plan']).split()[0])
+            except Exception:
+                pass
+            plan_key = f"{plan_gb}GB" if plan_gb else None
+            pool = configs_db.get('plans', {}).get(plan_key or '', [])
+
+            if plan_key and pool:
+                entry = pool.pop(0)
+                save_data()
+
+                if entry.get('type') == 'document':
+                    file_id = entry.get('value')
+                    bot.send_document(user_id, file_id, caption="🔐 فایل کانفیگ شما آماده است. با تشکر از خرید شما")
+                else:
+                    cfg = entry.get('value', '')
+                    bot.send_message(user_id, f"🔐 کانفیگ شما:\n\n`{cfg}`", parse_mode="Markdown")
+
+                bot.edit_message_text(
+                    f"✅ سفارش تأیید شد و کانفیگ از موجودی پلن ارسال شد!\n\n"
+                    f"🆔 آیدی کاربر: `{user_id}`\n"
+                    f"👤 نام کاربری: `{order_info['username']}`\n"
+                    f"📊 حجم: {order_info['data_plan']}\n"
+                    f"⏱ مدت: {order_info['duration']}\n"
+                    f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
+                    f"📦 پلن: {plan_key.replace('GB',' گیگ')}\n"
+                    f"📤 ارسال خودکار انجام شد.",
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode="Markdown"
+                )
+            else:
+                bot.edit_message_text(
+                    f"✅ سفارش تأیید شد اما موجودی کانفیگ برای این پلن خالی است.\n\n"
+                    f"🆔 آیدی کاربر: `{user_id}`\n"
+                    f"👤 نام کاربری: `{order_info['username']}`\n"
+                    f"📊 حجم: {order_info['data_plan']}\n"
+                    f"⏱ مدت: {order_info['duration']}\n"
+                    f"💰 مبلغ: {order_info['price']:,} تومان\n\n"
+                    f"⚠️ لطفا کانفیگ را به صورت دستی ارسال کنید.",
+                    call.message.chat.id,
+                    call.message.message_id,
+                    parse_mode="Markdown"
+                )
+                bot.register_next_step_handler(call.message, lambda msg: process_config_file(msg, user_id, order_id))
         except Exception as e:
-            print(f"Error sending approval message to user {user_id}: {e}")
-    
+            print(f"Error auto-sending config for user {user_id}: {e}")
     elif action == 'reject':
         # رد سفارش و مسدود کردن کاربر
         bot.edit_message_text(
@@ -3226,11 +3272,9 @@ def handle_order_approval(call):
             parse_mode="Markdown"
         )
         
-        # مسدود کردن کاربر
         blocked_users.add(user_id)
         save_data()
         
-        # ارسال پیام رد به کاربر
         try:
             bot.send_message(user_id, 
                            "❌ سفارش شما رد شد!\n\n"
@@ -3239,7 +3283,6 @@ def handle_order_approval(call):
         except Exception as e:
             print(f"Error sending rejection message to user {user_id}: {e}")
     
-    # حذف سفارش از لیست انتظار
     del pending_orders[order_id]
     
     bot.answer_callback_query(call.id)
