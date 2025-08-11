@@ -1,6 +1,8 @@
 import telebot
 from telebot import types
 import os
+import shutil
+import tempfile
 import time
 import json
 from datetime import datetime
@@ -8,7 +10,16 @@ from datetime import datetime
 # تنظیمات اولیه
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+# دایرکتوری اصلی پروژه برای مسیرهای پایدار فایل‌ها
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+ADMIN_ID = _safe_int(os.getenv("ADMIN_ID"))
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 CARD_NUMBER = os.getenv("CARD_NUMBER")
 
@@ -16,15 +27,45 @@ CARD_NUMBER = os.getenv("CARD_NUMBER")
 MAX_RETRIES = 3  # حداکثر تلاش برای ورود اطلاعات
 SESSION_TIMEOUT = 300  # زمان انقضای جلسه (5 دقیقه)
 
-# فایل‌های ذخیره‌سازی
+# فایل‌های ذخیره‌سازی (مسیر مطلق برای جلوگیری از پاک شدن ناخواسته در تغییر محیط)
 DATA_FILES = {
-    'users': 'users_data.json',
-    'blocked': 'blocked_users.json',
-    'configs': 'configs_data.json',
-    'discount': 'discount_data.json',
-    'orders': 'orders_data.json',
-    'representation': 'representation_requests.json'
+    'users': os.path.join(BASE_DIR, 'users_data.json'),
+    'blocked': os.path.join(BASE_DIR, 'blocked_users.json'),
+    'configs': os.path.join(BASE_DIR, 'configs_data.json'),
+    'discount': os.path.join(BASE_DIR, 'discount_data.json'),
+    'orders': os.path.join(BASE_DIR, 'orders_data.json'),
+    'representation': os.path.join(BASE_DIR, 'representation_requests.json')
 }
+
+# مسیر فایل‌های بکاپ (فقط برای configs)
+BACKUP_DIR = os.path.join(BASE_DIR, 'backups')
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+def _rotate_backup(file_path: str):
+    try:
+        if os.path.exists(file_path):
+            # بکاپ آخرین نسخه
+            shutil.copyfile(file_path, f"{file_path}.bak")
+            # بکاپ با زمان برای بازیابی دستی
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            dest = os.path.join(BACKUP_DIR, f"{os.path.basename(file_path)}.{ts}.bak")
+            shutil.copyfile(file_path, dest)
+    except Exception as e:
+        print(f"⚠️ خطا در ایجاد بکاپ {file_path}: {e}")
+
+def _atomic_write_json(file_path: str, data_obj):
+    try:
+        # ایجاد بکاپ قبل از نوشتن
+        _rotate_backup(file_path)
+        # نوشتن اتمیک
+        dir_name = os.path.dirname(file_path)
+        os.makedirs(dir_name, exist_ok=True)
+        with tempfile.NamedTemporaryFile('w', delete=False, dir=dir_name, encoding='utf-8') as tmp:
+            json.dump(data_obj, tmp, ensure_ascii=False, indent=2)
+            tmp_path = tmp.name
+        os.replace(tmp_path, file_path)
+    except Exception as e:
+        print(f"❌ خطا در نوشتن اتمیک فایل {file_path}: {e}")
 
 # ایجاد نمونه ربات
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -56,28 +97,22 @@ def save_data():
     """ذخیره تمام داده‌ها در فایل‌های JSON"""
     try:
         # ذخیره اطلاعات کاربران
-        with open(DATA_FILES['users'], 'w', encoding='utf-8') as f:
-            json.dump(users_db, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(DATA_FILES['users'], users_db)
         
         # ذخیره کاربران مسدود
-        with open(DATA_FILES['blocked'], 'w', encoding='utf-8') as f:
-            json.dump(list(blocked_users), f, ensure_ascii=False, indent=2)
+        _atomic_write_json(DATA_FILES['blocked'], list(blocked_users))
         
         # ذخیره کانفیگ‌ها
-        with open(DATA_FILES['configs'], 'w', encoding='utf-8') as f:
-            json.dump(configs_db, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(DATA_FILES['configs'], configs_db)
         
         # ذخیره تخفیف
-        with open(DATA_FILES['discount'], 'w', encoding='utf-8') as f:
-            json.dump({'discount_percentage': discount_percentage}, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(DATA_FILES['discount'], {'discount_percentage': discount_percentage})
         
         # ذخیره سفارشات
-        with open(DATA_FILES['orders'], 'w', encoding='utf-8') as f:
-            json.dump(orders_db, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(DATA_FILES['orders'], orders_db)
         
         # ذخیره درخواست‌های نمایندگی
-        with open(DATA_FILES['representation'], 'w', encoding='utf-8') as f:
-            json.dump(representation_requests, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(DATA_FILES['representation'], representation_requests)
         
         print("✅ تمام داده‌ها با موفقیت ذخیره شدند.")
     except Exception as e:
@@ -101,10 +136,20 @@ def load_data():
                 blocked_list = json.load(f)
                 blocked_users = set(int(x) for x in blocked_list)
         
-        # بارگذاری کانفیگ‌ها
+        # بارگذاری کانفیگ‌ها (با بازیابی از بکاپ در صورت خرابی)
         if os.path.exists(DATA_FILES['configs']):
-            with open(DATA_FILES['configs'], 'r', encoding='utf-8') as f:
-                configs_db = json.load(f)
+            try:
+                with open(DATA_FILES['configs'], 'r', encoding='utf-8') as f:
+                    configs_db = json.load(f)
+            except Exception as e:
+                print(f"⚠️ خطا در خواندن configs_data.json: {e} — تلاش برای بازیابی از بکاپ")
+                try:
+                    with open(f"{DATA_FILES['configs']}.bak", 'r', encoding='utf-8') as f:
+                        configs_db = json.load(f)
+                        print("✅ کانفیگ‌ها از بکاپ بازیابی شدند.")
+                except Exception as e2:
+                    print(f"❌ عدم موفقیت در بازیابی بکاپ کانفیگ‌ها: {e2}")
+                    configs_db = {}
         
         # بارگذاری تخفیف
         if os.path.exists(DATA_FILES['discount']):
@@ -154,7 +199,11 @@ def ensure_plan_pools():
         for plan_key in FIXED_PLAN_LABELS:
             configs_db['plans'].setdefault(plan_key, [])
     finally:
-        save_data()
+        # فقط ذخیره اگر ساختار تغییر کرد تا از overwrite غیرضروری جلوگیری شود
+        try:
+            _atomic_write_json(DATA_FILES['configs'], configs_db)
+        except Exception:
+            save_data()
 
 ensure_plan_pools()
 
@@ -2120,6 +2169,37 @@ def data_stats_command(message):
             stats_msg += f"❌ {name}: فایل وجود ندارد\n"
     
     bot.send_message(message.chat.id, stats_msg)
+
+# نمایش شمارش کانفیگ‌های هر پلن
+@bot.message_handler(commands=['plan_counts'])
+def plan_counts_command(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    ensure_plan_pools()
+    plans = (configs_db or {}).get('plans', {})
+    lines = ["📦 موجودی کانفیگ‌ها به تفکیک پلن:\n"]
+    total = 0
+    for plan in FIXED_PLAN_LABELS:
+        count = len(plans.get(plan, []))
+        total += count
+        lines.append(f"• {plan.replace('GB',' گیگ')}: {count}")
+    lines.append(f"\nمجموع: {total}")
+    bot.send_message(message.chat.id, "\n".join(lines))
+
+# ارسال فایل بکاپ کانفیگ‌ها
+@bot.message_handler(commands=['export_configs'])
+def export_configs_command(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        ensure_plan_pools()
+        # ذخیره قبل از ارسال برای اطمینان
+        _atomic_write_json(DATA_FILES['configs'], configs_db)
+        with open(DATA_FILES['configs'], 'rb') as f:
+            bot.send_document(message.chat.id, f, caption='📤 بکاپ configs_data.json')
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطا در ارسال بکاپ: {e}")
 
 # دستور پاسخ به پیام پشتیبانی
 @bot.message_handler(commands=['reply'])
