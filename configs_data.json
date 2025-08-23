@@ -1,7 +1,6 @@
 {
   "plans": {
     "30GB": [
-      {"type": "text", "value": "vless://e958f763-e886-48f7-93a8-f0bec02cb642@151.101.195.8:80?type=xhttp&path=%2Fazizdevspacefastley%3Fed%3D2560&host=azizdevspace.global.ssl.fastly.net&mode=auto&security=none#AzizVPN-30.2lkcsx1f", "upload_date": "2025-08-11 10:23:00"},
       {"type": "text", "value": "vless://3447e51e-0cc8-4515-a692-479dc508e2df@151.101.195.8:80?type=xhttp&path=%2Fazizdevspacefastley%3Fed%3D2560&host=azizdevspace.global.ssl.fastly.net&mode=auto&security=none#AzizVPN-30g59hvu21", "upload_date": "2025-08-11 10:23:00"},
       {"type": "text", "value": "vless://0ce72543-60c2-4f01-bbac-91baf23deee5@151.101.195.8:80?type=xhttp&path=%2Fazizdevspacefastley%3Fed%3D2560&host=azizdevspace.global.ssl.fastly.net&mode=auto&security=none#AzizVPN-30jlhbmsjq", "upload_date": "2025-08-11 10:23:00"},
       {"type": "text", "value": "vless://0733b0ea-dc24-40c9-bd34-e657da3456ba@151.101.195.8:80?type=xhttp&path=%2Fazizdevspacefastley%3Fed%3D2560&host=azizdevspace.global.ssl.fastly.net&mode=auto&security=none#AzizVPN-30gig", "upload_date": "2025-08-11 10:19:00"},
